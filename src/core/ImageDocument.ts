@@ -1,0 +1,123 @@
+import { Emitter } from './Emitter';
+import { Layer, type LayerProps } from './Layer';
+import type { SelectionMask } from './selection/SelectionMask';
+
+export type DocChange =
+  | { kind: 'structure' }
+  | { kind: 'active' }
+  | { kind: 'props'; layerId: string }
+  | { kind: 'pixels'; layerId: string }
+  | { kind: 'selection' }
+  | { kind: 'size' };
+
+/**
+ * Dokument = rozměry plátna + seznam vrstev (index 0 = nejspodnější) + výběr.
+ * Metody jsou „nízkoúrovňové“ a nezapisují do historie – to dělají příkazy (commands).
+ */
+export class ImageDocument extends Emitter<{ change: DocChange }> {
+  layers: Layer[] = [];
+  activeLayerId: string | null = null;
+  /** Aktuální výběr (maska o velikosti dokumentu) nebo null = nic není vybráno. */
+  selection: SelectionMask | null = null;
+  /** Zvyšuje se při každé změně – slouží k invalidaci cache (vzorkování pixelů apod.). */
+  version = 0;
+
+  constructor(
+    public width: number,
+    public height: number,
+  ) {
+    super();
+  }
+
+  private changed(change: DocChange): void {
+    this.version++;
+    this.emit('change', change);
+  }
+
+  setSelection(mask: SelectionMask | null): void {
+    const next = mask && !mask.isEmpty() ? mask : null;
+    if (next === this.selection) return;
+    this.selection = next;
+    this.changed({ kind: 'selection' });
+  }
+
+  /** Změní rozměry plátna (vrstvy ani výběr neupravuje – to dělají příkazy). */
+  resize(width: number, height: number): void {
+    this.width = width;
+    this.height = height;
+    this.changed({ kind: 'size' });
+  }
+
+  get activeLayer(): Layer | null {
+    return this.activeLayerId ? this.getLayer(this.activeLayerId) : null;
+  }
+
+  getLayer(id: string): Layer | null {
+    return this.layers.find((l) => l.id === id) ?? null;
+  }
+
+  indexOf(id: string): number {
+    return this.layers.findIndex((l) => l.id === id);
+  }
+
+  private requireIndex(id: string): number {
+    const index = this.indexOf(id);
+    if (index < 0) throw new Error(`Vrstva ${id} neexistuje`);
+    return index;
+  }
+
+  insertLayer(layer: Layer, index = this.layers.length): void {
+    const i = Math.max(0, Math.min(index, this.layers.length));
+    this.layers.splice(i, 0, layer);
+    if (!this.activeLayerId) this.activeLayerId = layer.id;
+    this.changed({ kind: 'structure' });
+  }
+
+  removeLayer(id: string): { layer: Layer; index: number } {
+    const index = this.requireIndex(id);
+    const [layer] = this.layers.splice(index, 1);
+    if (this.activeLayerId === id) {
+      const neighbour = this.layers[Math.min(index, this.layers.length - 1)] ?? null;
+      this.activeLayerId = neighbour?.id ?? null;
+    }
+    this.changed({ kind: 'structure' });
+    return { layer, index };
+  }
+
+  moveLayer(id: string, toIndex: number): void {
+    const from = this.requireIndex(id);
+    const to = Math.max(0, Math.min(toIndex, this.layers.length - 1));
+    if (from === to) return;
+    const [layer] = this.layers.splice(from, 1);
+    this.layers.splice(to, 0, layer);
+    this.changed({ kind: 'structure' });
+  }
+
+  setActive(id: string | null): void {
+    if (id !== null && !this.getLayer(id)) return;
+    if (this.activeLayerId === id) return;
+    this.activeLayerId = id;
+    this.changed({ kind: 'active' });
+  }
+
+  updateLayer(id: string, props: Partial<LayerProps>): void {
+    this.layers[this.requireIndex(id)].setProps(props);
+    this.changed({ kind: 'props', layerId: id });
+  }
+
+  /** Oznámí změnu pixelů vrstvy (překreslení, náhledy). */
+  notifyPixels(layerId: string): void {
+    this.changed({ kind: 'pixels', layerId });
+  }
+}
+
+export function createBlankDocument(width: number, height: number, background: string | null): ImageDocument {
+  const doc = new ImageDocument(width, height);
+  const layer = new Layer(width, height, { name: background ? 'Pozadí' : 'Vrstva 1' });
+  if (background) {
+    layer.ctx.fillStyle = background;
+    layer.ctx.fillRect(0, 0, width, height);
+  }
+  doc.insertLayer(layer);
+  return doc;
+}

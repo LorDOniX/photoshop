@@ -1,0 +1,14 @@
+# Vlastní photoshop
+- zdroje https://www.photopea.com/
+- zdroje https://github.com/storytold/photocraft složka photocraft
+- chtěl bych jednoduchou implementaci photoshopu přes typescript, vite a další knihovny navrhni
+- hlavní je pro mě editace obrázků, potřebuju vrstvy, měřítko, editace obrázku, masku; nepotřebuju nic složitého jako filtry nebo pokročilé efekty
+- důležitý je výběr oblasti obrázku, který chci upravit - magnetické laso, mnohoúhelník nebo magické hůlky
+- chtěl bych, aby šlo snadno přidávat a odebírat vrstvy a měnit jejich pořadí
+- důležité je také mít možnost vrátit zpět nebo znovu provedené akce - držet celou historii akcí, mít možnost jít vpřed a zpátky v rámci historie
+- chtěl bych, aby šlo snadno ukládat a načítat projekty, aby se daly později upravovat
+- důležité je také mít možnost exportovat výsledný obrázek do běžných formátů jako PNG nebo JPEG
+- chtěl bych, aby byla aplikace rychlá a responzivní, aby práce s obrázky byla plynulá a bez zbytečných prodlev
+- důležité je také mít možnost snadno měnit velikost a rozlišení obrázku
+- chtěl bych, aby byla aplikace modulární, aby šlo snadno přidávat nové nástroje a funkce
+- navrhni implementaci, uděláme pak první verzi kde budou vrstvy a můžeme pak postupně přidávat další věci
