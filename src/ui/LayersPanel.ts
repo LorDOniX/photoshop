@@ -1,6 +1,7 @@
 import { Brush, Contrast, Eye, FilePlus, Folder, Grid2x2, Link2, Lock, Move, SquareDot, Trash2 } from 'lucide';
 import type { Editor } from '../core/Editor';
 import { BLEND_MODES, type BlendMode, type Layer } from '../core/Layer';
+import { drawMaskPreview } from '../core/mask';
 import { iconButton, SliderField, toggleButton } from './controls';
 import { h, rafThrottle } from './dom';
 import { icon } from './icons';
@@ -16,14 +17,15 @@ export class LayersPanel {
   private readonly blend: HTMLSelectElement;
   private readonly opacity: SliderField;
   private readonly thumbs = new Map<string, HTMLCanvasElement>();
+  private readonly maskThumbs = new Map<string, HTMLCanvasElement>();
   private readonly dirtyThumbs = new Set<string>();
   private opacityBefore: number | null = null;
   private dragId: string | null = null;
 
   constructor(
     private readonly editor: Editor,
-    /** Kontextové menu vrstvy (pravé tlačítko). */
-    private readonly rowMenu: MenuItem[] = [],
+    /** Kontextová menu vrstvy a její masky (pravé tlačítko). */
+    private readonly menus: { row: MenuItem[]; mask: MenuItem[] } = { row: [], mask: [] },
   ) {
     this.blend = h(
       'select',
@@ -86,7 +88,9 @@ export class LayersPanel {
         { class: 'panel-footer' },
         iconButton(Link2, todo('Propojit vrstvy')),
         h('button', { class: 'icon-btn fx-btn', type: 'button', title: todo('Styly vrstvy') }, 'eff'),
-        iconButton(SquareDot, todo('Přidat masku vrstvy')),
+        iconButton(SquareDot, 'Přidat masku vrstvy (z výběru, je-li nějaký; Alt = skrýt)', (e) =>
+          editor.actions.run(editor.doc.selection ? (e.altKey ? 'mask.hideSelection' : 'mask.revealSelection') : e.altKey ? 'mask.hideAll' : 'mask.revealAll'),
+        ),
         iconButton(Contrast, todo('Nová vrstva úprav')),
         iconButton(Folder, todo('Nová skupina')),
         iconButton(FilePlus, 'Nová vrstva', run('layer.new')),
@@ -97,6 +101,7 @@ export class LayersPanel {
     const rebuild = rafThrottle(() => this.render());
     const refreshThumbs = rafThrottle(() => this.refreshThumbs());
     editor.on('document', rebuild);
+    editor.on('target', rebuild);
     editor.on('docChange', (c) => {
       if (c.kind === 'selection') return;
       if (c.kind === 'pixels') {
@@ -116,20 +121,58 @@ export class LayersPanel {
     this.opacity.disabled = !active;
 
     this.thumbs.clear();
+    this.maskThumbs.clear();
     const rows = [...doc.layers].reverse().map((layer) => this.renderRow(layer, layer.id === doc.activeLayerId));
     this.list.replaceChildren(...rows);
   }
 
   private renderRow(layer: Layer, active: boolean): HTMLElement {
     const { editor } = this;
-    const thumb = h('canvas', { class: 'thumb', width: THUMB_W * THUMB_SCALE, height: THUMB_H * THUMB_SCALE, title: 'Ctrl+klik = vybrat pixely vrstvy' });
+    const targeted = active ? (editor.maskTarget ? 'mask' : 'pixels') : null;
+    const thumb = h('canvas', {
+      class: `thumb${targeted === 'pixels' && layer.mask ? ' targeted' : ''}`,
+      width: THUMB_W * THUMB_SCALE,
+      height: THUMB_H * THUMB_SCALE,
+      title: 'Klik = upravovat pixely, Ctrl+klik = vybrat pixely vrstvy',
+    });
     thumb.addEventListener('click', (e) => {
-      if (!e.ctrlKey && !e.metaKey) return;
-      e.stopPropagation();
-      editor.selectLayerPixels(layer.id);
+      if (e.ctrlKey || e.metaKey) {
+        e.stopPropagation();
+        editor.selectLayerPixels(layer.id);
+        return;
+      }
+      editor.doc.setActive(layer.id);
+      editor.setMaskTarget(false);
     });
     this.thumbs.set(layer.id, thumb);
     this.drawThumb(layer, thumb);
+
+    let maskThumb: HTMLCanvasElement | null = null;
+    if (layer.mask) {
+      maskThumb = h('canvas', {
+        class: `thumb mask-thumb${targeted === 'mask' ? ' targeted' : ''}${layer.maskEnabled ? '' : ' mask-off'}`,
+        width: THUMB_W * THUMB_SCALE,
+        height: THUMB_H * THUMB_SCALE,
+        title: 'Maska vrstvy – klik = upravovat masku, Shift+klik = zapnout/vypnout, Ctrl+klik = výběr z masky',
+      });
+      const wrap = maskThumb;
+      wrap.addEventListener('click', (e) => {
+        e.stopPropagation();
+        editor.doc.setActive(layer.id);
+        if (e.ctrlKey || e.metaKey) editor.selectionFromMask(layer.id);
+        else if (e.shiftKey) editor.toggleMask();
+        else editor.setMaskTarget(true);
+      });
+      wrap.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        editor.doc.setActive(layer.id);
+        editor.setMaskTarget(true);
+        if (this.menus.mask.length) showContextMenu(editor.actions, this.menus.mask, e.clientX, e.clientY);
+      });
+      this.maskThumbs.set(layer.id, maskThumb);
+      this.drawMaskThumb(layer, maskThumb);
+    }
 
     const eye = h(
       'button',
@@ -157,6 +200,7 @@ export class LayersPanel {
       },
       eye,
       thumb,
+      maskThumb,
       name,
       layer.opacity < 1 ? h('span', { class: 'badge' }, `${Math.round(layer.opacity * 100)} %`) : null,
     );
@@ -164,7 +208,7 @@ export class LayersPanel {
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       editor.doc.setActive(layer.id);
-      if (this.rowMenu.length) showContextMenu(editor.actions, this.rowMenu, e.clientX, e.clientY);
+      if (this.menus.row.length) showContextMenu(editor.actions, this.menus.row, e.clientX, e.clientY);
     });
     row.addEventListener('dragstart', (e) => {
       this.dragId = layer.id;
@@ -228,9 +272,50 @@ export class LayersPanel {
     for (const id of this.dirtyThumbs) {
       const layer = this.editor.doc.getLayer(id);
       const thumb = this.thumbs.get(id);
+      const maskThumb = this.maskThumbs.get(id);
       if (layer && thumb) this.drawThumb(layer, thumb);
+      if (layer && maskThumb) this.drawMaskThumb(layer, maskThumb);
     }
     this.dirtyThumbs.clear();
+  }
+
+  /** Umístění vrstvy v náhledu (náhled zobrazuje celé plátno dokumentu). */
+  private thumbGeometry(layer: Layer) {
+    const { width, height } = this.editor.doc;
+    const tw = THUMB_W * THUMB_SCALE;
+    const th = THUMB_H * THUMB_SCALE;
+    const scale = Math.min(tw / width, th / height);
+    const w = width * scale;
+    const hgt = height * scale;
+    const ox = (tw - w) / 2;
+    const oy = (th - hgt) / 2;
+    return { tw, th, scale, w, hgt, ox, oy, lx: ox + layer.x * scale, ly: oy + layer.y * scale };
+  }
+
+  /** Náhled masky: bílá = odkryto, černá = skryto (mimo vrstvu šedě). */
+  private drawMaskThumb(layer: Layer, thumb: HTMLCanvasElement): void {
+    const ctx = thumb.getContext('2d');
+    if (!ctx || !layer.mask) return;
+    const g = this.thumbGeometry(layer);
+    ctx.clearRect(0, 0, g.tw, g.th);
+    ctx.fillStyle = '#808080';
+    ctx.fillRect(g.ox, g.oy, g.w, g.hgt);
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(g.ox, g.oy, g.w, g.hgt);
+    ctx.clip();
+    drawMaskPreview(ctx, layer.mask, g.lx, g.ly, layer.width * g.scale, layer.height * g.scale);
+    ctx.restore();
+    if (!layer.maskEnabled) {
+      ctx.strokeStyle = '#e53935';
+      ctx.lineWidth = 3 * THUMB_SCALE;
+      ctx.beginPath();
+      ctx.moveTo(g.ox, g.oy);
+      ctx.lineTo(g.ox + g.w, g.oy + g.hgt);
+      ctx.moveTo(g.ox + g.w, g.oy);
+      ctx.lineTo(g.ox, g.oy + g.hgt);
+      ctx.stroke();
+    }
   }
 
   /** Náhled vrstvy v kontextu plátna dokumentu (vč. posunu). */

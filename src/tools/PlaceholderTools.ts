@@ -6,7 +6,6 @@ import {
   Blend,
   Circle,
   Contrast,
-  Crop,
   Crosshair,
   Droplet,
   Eraser,
@@ -40,7 +39,6 @@ import {
   Moon,
   Triangle,
   Type,
-  WandSparkles,
   Waves,
   X,
   Check,
@@ -72,17 +70,6 @@ export class PlaceholderTool implements Tool {
 }
 
 // ---- volby podle lišt Photopea ----
-
-const cropOptions = () => [
-  ...ratioFields(),
-  separator(),
-  textButton('Narovnat'),
-  checkbox('Smazat oříznuté pixely', true),
-  checkbox('Obsahově závislé'),
-  separator(),
-  iconButton(X, 'Zrušit'),
-  iconButton(Check, 'Potvrdit'),
-];
 
 const sliceOptions = () => [selectField('Styl:', ['Normální', 'Pevný poměr', 'Pevná velikost']), textButton('Řezy z vodítek')];
 
@@ -216,9 +203,7 @@ export function createPlaceholderTools(): Tool[] {
     new PlaceholderTool(id, name, icon, shortcut, options);
   return [
     t('artboard', 'Kreslicí plátno', Frame, 'V', () => [textButton('Přidat plátno')]),
-    t('quick-select', 'Rychlý výběr', WandSparkles, 'W', () => [selectionModes(), separator(), brushPreset(), checkbox('Ze všech vrstev')]),
     t('object-select', 'Výběr objektu', SquareDashedMousePointer, 'W', () => [selectionModes(), separator(), selectField('Režim:', ['Obdélník', 'Laso'])]),
-    t('crop', 'Oříznutí', Crop, 'C', cropOptions),
     t('crop-perspective', 'Perspektivní oříznutí', Triangle, 'C', () => [...sizeFields(), iconButton(X, 'Zrušit'), iconButton(Check, 'Potvrdit')]),
     t('slice', 'Řez', Scissors, 'C', sliceOptions),
     t('slice-select', 'Výběr řezu', Pointer, 'C', () => [textButton('Rozdělit…')]),

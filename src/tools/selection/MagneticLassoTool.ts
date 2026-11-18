@@ -6,6 +6,7 @@ import type { SelectionMode } from '../../core/selection/SelectionMask';
 import type { Tool, ToolOptionsUI, ToolPointer } from '../Tool';
 import { strokePolyline } from './LassoTool';
 import { selectionOptionsUI } from './selectionOptions';
+import { nudgeSelection } from './outlineMove';
 
 const CLOSE_DISTANCE = 8;
 const DOUBLE_CLICK_MS = 350;
@@ -104,7 +105,7 @@ export class MagneticLassoTool implements Tool {
   }
 
   keyDown(e: KeyboardEvent): boolean {
-    if (!this.active) return false;
+    if (!this.active) return nudgeSelection(this.editor, e);
     if (e.key === 'Escape') this.cancel();
     else if (e.key === 'Enter') this.finish();
     else if (e.key === 'Backspace') this.removeAnchor();

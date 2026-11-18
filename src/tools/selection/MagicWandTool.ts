@@ -4,6 +4,7 @@ import { floodSelect } from '../../core/selection/floodFill';
 import { samplePixels } from '../../core/selection/raster';
 import type { Tool, ToolOptionsUI, ToolPointer } from '../Tool';
 import { selectionOptionsUI } from './selectionOptions';
+import { nudgeSelection } from './outlineMove';
 
 /** Kouzelná hůlka – vybere oblast podobné barvy (tolerance, souvislé, ze všech vrstev). */
 export class MagicWandTool implements Tool {
@@ -32,5 +33,9 @@ export class MagicWandTool implements Tool {
 
   createOptions(): ToolOptionsUI {
     return selectionOptionsUI(this.editor, { wand: true });
+  }
+
+  keyDown(e: KeyboardEvent): boolean {
+    return nudgeSelection(this.editor, e);
   }
 }

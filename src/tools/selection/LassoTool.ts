@@ -5,6 +5,7 @@ import type { SelectionMode } from '../../core/selection/SelectionMask';
 import type { IconNode } from '../../ui/icons';
 import type { Tool, ToolOptionsUI, ToolPointer } from '../Tool';
 import { selectionOptionsUI } from './selectionOptions';
+import { nudgeSelection, OutlineDrag, startsOutlineMove } from './outlineMove';
 
 const CLOSE_DISTANCE = 8; // px obrazovky – klik u počátečního bodu uzavře mnohoúhelník
 const DOUBLE_CLICK_MS = 350;
@@ -47,6 +48,7 @@ export class LassoTool implements Tool {
   private hover: { x: number; y: number } | null = null;
   private drawing = false;
   private lastClick = { time: 0, x: 0, y: 0 };
+  private outline: OutlineDrag | null = null;
 
   constructor(
     private readonly editor: Editor,
@@ -64,6 +66,10 @@ export class LassoTool implements Tool {
   pointerDown(p: ToolPointer): void {
     if (p.button !== 0) return;
     if (this.kind === 'free') {
+      if (startsOutlineMove(this.editor, p)) {
+        this.outline = new OutlineDrag(this.editor, p.x, p.y);
+        return;
+      }
       this.mode = this.editor.selectionModeFor(p);
       this.points = [p.x, p.y];
       this.drawing = true;
@@ -89,6 +95,7 @@ export class LassoTool implements Tool {
   }
 
   pointerMove(p: ToolPointer): void {
+    if (this.outline) return this.outline.move(p);
     this.hover = this.active ? this.constrained(p) : null;
     if (this.kind === 'free' && this.drawing) {
       const n = this.points.length;
@@ -99,13 +106,18 @@ export class LassoTool implements Tool {
   }
 
   pointerUp(): void {
+    if (this.outline) {
+      if (!this.outline.end()) this.editor.deselect();
+      this.outline = null;
+      return;
+    }
     if (this.kind !== 'free' || !this.drawing) return;
     this.drawing = false;
     this.finish();
   }
 
   keyDown(e: KeyboardEvent): boolean {
-    if (!this.active) return false;
+    if (!this.active) return nudgeSelection(this.editor, e);
     if (e.key === 'Escape') this.cancel();
     else if (e.key === 'Enter') this.finish();
     else if (e.key === 'Backspace' && this.kind === 'polygon') {

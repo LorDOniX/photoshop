@@ -10,15 +10,18 @@ export class DocumentTabs {
   constructor(editor: Editor) {
     this.element = h('div', { class: 'doc-tabs' });
     const render = () => {
+      const layer = editor.doc.activeLayer;
+      const suffix = editor.maskTarget && layer ? ` (${layer.name}, maska vrstvy)` : '';
       const tab = h(
         'div',
         { class: 'doc-tab active', title: `${editor.doc.width} × ${editor.doc.height} px` },
-        h('span', { class: 'doc-tab-name' }, editor.fileName),
+        h('span', { class: 'doc-tab-name' }, editor.fileName + suffix),
         iconButton(X, 'Zavřít – připravujeme', undefined, 'doc-tab-close'),
       );
       this.element.replaceChildren(tab);
     };
     editor.on('document', render);
+    editor.on('target', render);
     render();
   }
 }

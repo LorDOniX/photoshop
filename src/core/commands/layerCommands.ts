@@ -100,7 +100,10 @@ export class MacroCommand implements Command {
   }
 }
 
-/** Změna pixelů v obdélníku vrstvy – drží stav před a po (jen dotčená oblast). */
+/** Co se na vrstvě upravuje: obrazové pixely, nebo maska. */
+export type PaintTargetKind = 'pixels' | 'mask';
+
+/** Změna pixelů v obdélníku vrstvy (nebo její masky) – drží stav před a po (jen dotčená oblast). */
 export class PaintCommand implements Command {
   constructor(
     private readonly doc: ImageDocument,
@@ -110,12 +113,14 @@ export class PaintCommand implements Command {
     private readonly before: ImageData,
     private readonly after: ImageData,
     readonly label = 'Malování',
+    private readonly target: PaintTargetKind = 'pixels',
   ) {}
 
   private apply(data: ImageData): void {
     const layer = this.doc.getLayer(this.layerId);
-    if (!layer) return;
-    layer.ctx.putImageData(data, this.x, this.y);
+    const canvas = this.target === 'mask' ? layer?.mask : layer?.canvas;
+    if (!layer || !canvas) return;
+    canvas.getContext('2d')?.putImageData(data, this.x, this.y);
     this.doc.notifyPixels(this.layerId);
   }
 
@@ -125,5 +130,31 @@ export class PaintCommand implements Command {
 
   undo(): void {
     this.apply(this.before);
+  }
+}
+
+/** Přidání / odebrání / výměna masky vrstvy. Přidaná maska se zároveň zapne. */
+export class SetMaskCommand implements Command {
+  private prevEnabled = true;
+
+  constructor(
+    private readonly doc: ImageDocument,
+    private readonly layerId: string,
+    private readonly before: HTMLCanvasElement | null,
+    private readonly after: HTMLCanvasElement | null,
+    readonly label: string,
+  ) {}
+
+  do(): void {
+    const layer = this.doc.getLayer(this.layerId);
+    if (!layer) return;
+    this.prevEnabled = layer.maskEnabled;
+    if (this.after) this.doc.updateLayer(this.layerId, { maskEnabled: true });
+    this.doc.setLayerMask(this.layerId, this.after);
+  }
+
+  undo(): void {
+    this.doc.setLayerMask(this.layerId, this.before);
+    this.doc.updateLayer(this.layerId, { maskEnabled: this.prevEnabled });
   }
 }

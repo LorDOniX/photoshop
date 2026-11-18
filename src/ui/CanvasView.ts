@@ -132,6 +132,10 @@ export class CanvasView {
       for (const ce of events.length ? events : [e]) this.editor.activeTool?.pointerMove?.(this.toPointer(ce));
     } else {
       this.editor.activeTool?.pointerMove?.(p);
+      if (!this.spaceHeld) {
+        const tool = this.editor.activeTool;
+        this.canvas.style.cursor = tool?.cursorAt?.(p) ?? tool?.cursor ?? 'default';
+      }
     }
     this.editor.notifyView();
   }

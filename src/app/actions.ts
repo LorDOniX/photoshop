@@ -5,7 +5,8 @@ import type { SelectionMask } from '../core/selection/SelectionMask';
 import { exportImage, type ExportFormat } from '../io/export';
 import { baseName, canvasToBlob, downloadBlob, pickFile } from '../io/files';
 import { PROJECT_EXTENSION, saveProject } from '../io/project';
-import { promptNumber, showNewDocumentDialog } from '../ui/dialogs';
+import { promptNumber, showForm, showNewDocumentDialog } from '../ui/dialogs';
+import type { TransformTool } from '../tools/TransformTool';
 
 /** Kopie do systémové schránky (aby šlo vkládat i do jiných aplikací); selhání se ignoruje. */
 async function writeSystemClipboard(canvas: HTMLCanvasElement | undefined): Promise<void> {
@@ -31,6 +32,9 @@ export interface AppContext {
 export function registerActions(editor: Editor, app: AppContext): void {
   const hasLayer = () => editor.doc.activeLayer !== null;
   const hasSelection = () => editor.doc.selection !== null;
+  const hasMask = () => !!editor.doc.activeLayer?.mask;
+  const transformTool = () => editor.tools.get('transform') as TransformTool | undefined;
+  let refine = { smooth: 0, feather: 0, shift: 0 };
   /** Výběr → Upravit → … (dialog s jedním číslem). */
   const modifyAction = (
     id: string,
@@ -174,6 +178,131 @@ export function registerActions(editor: Editor, app: AppContext): void {
 
     // ---- Obraz ----
     { id: 'image.crop', label: 'Oříznout na výběr', run: () => editor.cropToSelection(), isEnabled: hasSelection },
+    {
+      id: 'image.size',
+      label: 'Velikost obrazu…',
+      shortcuts: ['Ctrl+Alt+I'],
+      run: async () => {
+        const W = editor.doc.width;
+        const H = editor.doc.height;
+        const v = await showForm(
+          'Velikost obrazu',
+          [
+            { kind: 'number', key: 'width', label: 'Šířka', value: W, min: 1, max: 30000, step: 1, unit: 'px' },
+            { kind: 'number', key: 'height', label: 'Výška', value: H, min: 1, max: 30000, step: 1, unit: 'px' },
+            { kind: 'number', key: 'percent', label: 'Měřítko', value: 100, min: 1, max: 1000, unit: '%' },
+            { kind: 'checkbox', key: 'keep', label: 'Zachovat poměr stran', value: true },
+            {
+              kind: 'select',
+              key: 'resample',
+              label: 'Převzorkování',
+              value: 'smooth',
+              options: [
+                { value: 'smooth', label: 'Hladké (bikubické)' },
+                { value: 'nearest', label: 'Nejbližší soused (ostré hrany)' },
+              ],
+            },
+            { kind: 'note', key: 'info', label: `Původní velikost: ${W} × ${H} px` },
+          ],
+          (key, f) => {
+            const keep = Boolean(f.get('keep'));
+            if (key === 'width' || (key === 'keep' && keep)) {
+              const w = Number(f.get('width'));
+              f.set('percent', (w / W) * 100);
+              if (keep) f.set('height', Math.max(1, Math.round((w * H) / W)));
+            } else if (key === 'height') {
+              const hh = Number(f.get('height'));
+              if (keep) {
+                f.set('width', Math.max(1, Math.round((hh * W) / H)));
+                f.set('percent', (hh / H) * 100);
+              }
+            } else if (key === 'percent') {
+              const p = Number(f.get('percent')) / 100;
+              f.set('width', Math.max(1, Math.round(W * p)));
+              f.set('height', Math.max(1, Math.round(H * p)));
+            }
+          },
+        );
+        if (v) editor.resizeImage(Math.round(Number(v.width)), Math.round(Number(v.height)), v.resample === 'smooth');
+      },
+    },
+    {
+      id: 'image.canvasSize',
+      label: 'Velikost plátna…',
+      shortcuts: ['Ctrl+Alt+C'],
+      run: async () => {
+        const W = editor.doc.width;
+        const H = editor.doc.height;
+        const v = await showForm('Velikost plátna', [
+          { kind: 'number', key: 'width', label: 'Šířka', value: W, min: 1, max: 30000, step: 1, unit: 'px' },
+          { kind: 'number', key: 'height', label: 'Výška', value: H, min: 1, max: 30000, step: 1, unit: 'px' },
+          { kind: 'anchor', key: 'anchor', label: 'Ukotvení', value: 4 },
+          {
+            kind: 'select',
+            key: 'fill',
+            label: 'Barva rozšíření',
+            value: 'background',
+            options: [
+              { value: 'background', label: 'Barva pozadí' },
+              { value: '#ffffff', label: 'Bílá' },
+              { value: '#000000', label: 'Černá' },
+              { value: 'transparent', label: 'Průhledná' },
+            ],
+          },
+          { kind: 'note', key: 'info', label: `Původní velikost: ${W} × ${H} px. Rozšíří se jen spodní vrstva pozadí.` },
+        ]);
+        if (!v) return;
+        const fill = v.fill === 'transparent' ? null : v.fill === 'background' ? editor.settings.secondaryColor : String(v.fill);
+        editor.resizeCanvas(Math.round(Number(v.width)), Math.round(Number(v.height)), Number(v.anchor), fill);
+      },
+    },
+    { id: 'image.rotateCW', label: 'Otočit o 90° ↻', run: () => editor.rotateDocument(1) },
+    { id: 'image.rotateCCW', label: 'Otočit o 90° ↺', run: () => editor.rotateDocument(3) },
+    { id: 'image.rotate180', label: 'Otočit o 180°', run: () => editor.rotateDocument(2) },
+    { id: 'image.flipH', label: 'Převrátit vodorovně', run: () => editor.flipDocument('h') },
+    { id: 'image.flipV', label: 'Převrátit svisle', run: () => editor.flipDocument('v') },
+    {
+      id: 'image.trim',
+      label: 'Ořezat…',
+      shortcuts: ['Ctrl+.'],
+      run: async () => {
+        const v = await showForm('Ořezat', [
+          {
+            kind: 'select',
+            key: 'basis',
+            label: 'Podle',
+            value: 'transparent',
+            options: [
+              { value: 'transparent', label: 'Průhledných pixelů' },
+              { value: 'topLeft', label: 'Barvy levého horního pixelu' },
+              { value: 'bottomRight', label: 'Barvy pravého dolního pixelu' },
+            ],
+          },
+        ]);
+        if (v && !editor.trim(v.basis as 'transparent' | 'topLeft' | 'bottomRight')) alert('Není co ořezat.');
+      },
+    },
+    { id: 'image.revealAll', label: 'Odkrýt vše', run: () => editor.revealAll() },
+
+    // ---- Transformace ----
+    {
+      id: 'edit.freeTransform',
+      label: 'Volná transformace',
+      shortcuts: ['Ctrl+Alt+T'],
+      run: () => void transformTool()?.begin(false),
+      isEnabled: hasLayer,
+    },
+    {
+      id: 'select.transform',
+      label: 'Transformovat výběr',
+      run: () => void transformTool()?.begin(true),
+      isEnabled: hasSelection,
+    },
+    { id: 'transform.cw', label: 'Otočit o 90° ↻', run: () => editor.transformQuick('cw'), isEnabled: hasLayer },
+    { id: 'transform.ccw', label: 'Otočit o 90° ↺', run: () => editor.transformQuick('ccw'), isEnabled: hasLayer },
+    { id: 'transform.180', label: 'Otočit o 180°', run: () => editor.transformQuick('180'), isEnabled: hasLayer },
+    { id: 'transform.flipH', label: 'Převrátit vodorovně', run: () => editor.transformQuick('flipH'), isEnabled: hasLayer },
+    { id: 'transform.flipV', label: 'Převrátit svisle', run: () => editor.transformQuick('flipV'), isEnabled: hasLayer },
 
     // ---- Výběr ----
     { id: 'select.all', label: 'Vše', shortcuts: ['Ctrl+A'], run: () => editor.selectAll() },
@@ -185,6 +314,25 @@ export function registerActions(editor: Editor, app: AppContext): void {
     modifyAction('select.expand', 'Rozšířit…', 'Rozšířit o', 4, (m, v) => m.expand(v), 'Rozšířit výběr'),
     modifyAction('select.contract', 'Zúžit…', 'Zúžit o', 4, (m, v) => m.contract(v), 'Zúžit výběr'),
     { ...modifyAction('select.feather', 'Prolnout…', 'Poloměr prolnutí', 8, (m, v) => m.feather(v), 'Prolnout výběr'), shortcuts: ['Shift+F6'] },
+    { id: 'select.grow', label: 'Zvětšit', run: () => editor.growSelection(true), isEnabled: hasSelection },
+    { id: 'select.similar', label: 'Podobné', run: () => editor.growSelection(false), isEnabled: hasSelection },
+    {
+      id: 'select.refineEdge',
+      label: 'Upřesnit okraj…',
+      shortcuts: ['Ctrl+Alt+R'],
+      isEnabled: hasSelection,
+      run: async () => {
+        const v = await showForm('Upřesnit okraj', [
+          { kind: 'number', key: 'smooth', label: 'Vyhladit', value: refine.smooth, min: 0, max: 100, unit: 'px' },
+          { kind: 'number', key: 'feather', label: 'Prolnutí', value: refine.feather, min: 0, max: 250, unit: 'px' },
+          { kind: 'number', key: 'shift', label: 'Posunout okraj', value: refine.shift, min: -100, max: 100, unit: 'px' },
+          { kind: 'note', key: 'n', label: 'Kladný posun okraj rozšíří, záporný zúží.' },
+        ]);
+        if (!v) return;
+        refine = { smooth: Number(v.smooth), feather: Number(v.feather), shift: Math.round(Number(v.shift)) };
+        editor.refineEdge(refine);
+      },
+    },
 
     // ---- Vrstva ----
     { id: 'layer.new', label: 'Vrstva', shortcuts: ['Alt+Shift+N'], run: () => editor.addLayer() },
@@ -216,6 +364,42 @@ export function registerActions(editor: Editor, app: AppContext): void {
       },
       isEnabled: hasLayer,
     },
+
+    // ---- Rastrová maska ----
+    ...(
+      [
+        ['mask.revealAll', 'Přidat (odkrýt vše)', 'revealAll', false],
+        ['mask.hideAll', 'Přidat (skrýt vše)', 'hideAll', false],
+        ['mask.revealSelection', 'Odkrýt výběr', 'revealSelection', true],
+        ['mask.hideSelection', 'Skrýt výběr', 'hideSelection', true],
+        ['mask.fromTransparency', 'Z průhlednosti', 'fromTransparency', false],
+      ] as const
+    ).map(
+      ([id, label, kind, needsSelection]): Action => ({
+        id,
+        label,
+        run: () => editor.addMask(kind),
+        isEnabled: () => hasLayer() && !hasMask() && (!needsSelection || hasSelection()),
+      }),
+    ),
+    { id: 'mask.delete', label: 'Smazat masku', run: () => editor.deleteMask(), isEnabled: hasMask },
+    { id: 'mask.apply', label: 'Použít masku', run: () => editor.applyMask(), isEnabled: hasMask },
+    {
+      id: 'mask.toggle',
+      label: 'Maska zapnutá',
+      run: () => editor.toggleMask(),
+      isEnabled: hasMask,
+      isChecked: () => !!editor.doc.activeLayer?.mask && editor.doc.activeLayer.maskEnabled,
+    },
+    {
+      id: 'mask.edit',
+      label: 'Upravovat masku',
+      shortcuts: ['Ctrl+\\'],
+      run: () => editor.setMaskTarget(!editor.maskTarget),
+      isEnabled: hasMask,
+      isChecked: () => editor.maskTarget,
+    },
+    { id: 'mask.toSelection', label: 'Výběr z masky', run: () => editor.selectionFromMask(), isEnabled: hasMask },
     {
       id: 'layer.delete',
       label: 'Smazat vrstvu',

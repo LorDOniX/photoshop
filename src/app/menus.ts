@@ -6,6 +6,8 @@ export interface AppMenus {
   menuBar: MenuDef[];
   /** Pravé tlačítko na vrstvě. */
   layerContext: MenuItem[];
+  /** Pravé tlačítko na náhledu masky. */
+  maskContext: MenuItem[];
   /** Nabídky ≡ jednotlivých panelů. */
   panels: Record<'history' | 'swatches' | 'layers' | 'channels' | 'paths', MenuItem[]>;
 }
@@ -25,7 +27,6 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
   const sub = (label: string, items: MenuItem[]): MenuItem => ({ label, items });
   const todoSub = (label: string, labels: string[]): MenuItem => sub(label, labels.map((l) => (l === '-' ? l : todo(l))));
 
-  const transformItems = ['Otočit o 90° ↻', 'Otočit o 90° ↺', 'Otočit o 180°', 'Převrátit vodorovně', 'Převrátit svisle'];
   const adjustments = [
     'Jas/kontrast…', 'Úrovně…', 'Křivky…', 'Expozice…', 'Živost…', 'Odstín/sytost…', 'Vyvážení barev…',
     'Černobílý…', 'Fotofiltr…', '-', 'Invertovat', 'Posterizace…', 'Práh…', 'Mapa přechodu…', '-', 'Odbarvit',
@@ -63,8 +64,19 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     'edit.fillBg',
     todo('Obrys…'),
     '-',
-    todo('Volná transformace', 'Ctrl+Alt+T'),
-    todoSub('Transformovat', ['Znovu', '-', 'Změnit velikost', 'Otočit', 'Zkosit', 'Zkreslit', 'Perspektiva', 'Deformace', '-', ...transformItems]),
+    'edit.freeTransform',
+    sub('Transformovat', [
+      todo('Zkosit'),
+      todo('Zkreslit'),
+      todo('Perspektiva'),
+      todo('Deformace'),
+      '-',
+      'transform.cw',
+      'transform.ccw',
+      'transform.180',
+      'transform.flipH',
+      'transform.flipV',
+    ]),
     '-',
     todoSub('Definovat', ['Vzorek', 'Štětec', 'Vlastní tvar']),
     '-',
@@ -79,12 +91,12 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     todo('Automatický kontrast'),
     todo('Automatické barvy'),
     '-',
-    todo('Velikost plátna…', 'Ctrl+Alt+C'),
-    todo('Velikost obrazu…', 'Ctrl+Alt+I'),
-    todoSub('Transformovat', transformItems),
+    'image.canvasSize',
+    'image.size',
+    sub('Transformovat', ['image.rotateCW', 'image.rotateCCW', 'image.rotate180', '-', 'image.flipH', 'image.flipV']),
     'image.crop',
-    todo('Ořezat…', 'Ctrl+.'),
-    todo('Odkrýt vše'),
+    'image.trim',
+    'image.revealAll',
     '-',
     todo('Duplikovat'),
   ];
@@ -98,7 +110,20 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     todoSub('Nová výplňová vrstva', ['Barva…', 'Přechod…', 'Vzorek…']),
     todoSub('Nová vrstva úprav', adjustments.filter((a) => a !== 'Odbarvit')),
     '-',
-    todoSub('Rastrová maska', ['Přidat (odkrýt vše)', 'Přidat (skrýt vše)', 'Odkrýt výběr', 'Skrýt výběr', 'Z průhlednosti', '-', 'Smazat', 'Použít', 'Zapnout/vypnout']),
+    sub('Rastrová maska', [
+      'mask.revealAll',
+      'mask.hideAll',
+      'mask.revealSelection',
+      'mask.hideSelection',
+      'mask.fromTransparency',
+      '-',
+      'mask.delete',
+      'mask.apply',
+      'mask.toggle',
+      '-',
+      'mask.edit',
+      'mask.toSelection',
+    ]),
     todoSub('Vektorová maska', ['Přidat (odkrýt vše)', 'Přidat (skrýt vše)', 'Aktuální cesta', '-', 'Smazat', 'Zapnout/vypnout']),
     todo('Ořezová maska', 'Ctrl+Alt+G'),
     '-',
@@ -121,11 +146,11 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     '-',
     todo('Rozsah barev…'),
     todo('Předmět'),
-    todo('Upřesnit okraj…'),
+    'select.refineEdge',
     sub('Upravit', ['select.border', 'select.smooth', 'select.expand', 'select.contract', 'select.feather']),
-    todo('Zvětšit'),
-    todo('Podobné'),
-    todo('Transformovat výběr'),
+    'select.grow',
+    'select.similar',
+    'select.transform',
     '-',
     todo('Režim rychlé masky', 'Q'),
     '-',
@@ -202,6 +227,8 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     todo('Ořezová maska'),
     todo('Styl vrstvy'),
     '-',
+    sub('Rastrová maska', ['mask.revealAll', 'mask.hideAll', 'mask.revealSelection', 'mask.hideSelection', '-', 'mask.delete', 'mask.apply']),
+    '-',
     todo('Sloučit dolů'),
     todo('Zploštit obraz'),
     '-',
@@ -221,6 +248,7 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
       { label: 'Další', items: more },
     ],
     layerContext,
+    maskContext: ['mask.toggle', 'mask.delete', 'mask.apply', '-', 'mask.toSelection'],
     panels: {
       history: [todo('Vymazat historii'), todo('Nový snímek')],
       swatches: [todo('Přidat barvu popředí'), todo('Načíst vzorník…'), todo('Obnovit výchozí')],

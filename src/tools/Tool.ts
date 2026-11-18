@@ -42,6 +42,8 @@ export interface Tool {
   keyDown?(e: KeyboardEvent): boolean;
   /** Kreslení pomocné grafiky přes plátno (v souřadnicích obrazovky). */
   drawOverlay?(ctx: CanvasRenderingContext2D, editor: Editor): void;
+  /** Kurzor podle místa pod myší (úchyty transformace apod.); null = výchozí `cursor`. */
+  cursorAt?(p: ToolPointer): string | null;
   /** UI s volbami nástroje zobrazené v horní liště. */
   createOptions?(): ToolOptionsUI;
 }

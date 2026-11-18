@@ -1,11 +1,26 @@
-import { AddLayerCommand, MacroCommand, MoveLayerCommand, PaintCommand, RemoveLayerCommand, SetLayerPropsCommand } from './commands/layerCommands';
-import { CropCommand, SetSelectionCommand } from './commands/selectionCommands';
+import {
+  AddLayerCommand,
+  MacroCommand,
+  MoveLayerCommand,
+  PaintCommand,
+  RemoveLayerCommand,
+  SetLayerPropsCommand,
+  SetMaskCommand,
+  type PaintTargetKind,
+} from './commands/layerCommands';
+import { SetSelectionCommand } from './commands/selectionCommands';
+import { DocStateCommand } from './commands/stateCommands';
 import { clipRect, createCanvas, get2d, type Rect } from './canvas';
 import { Emitter } from './Emitter';
 import { History, type Command } from './History';
-import { createBlankDocument, type DocChange, type ImageDocument } from './ImageDocument';
+import { createBlankDocument, type DocChange, type DocState, type ImageDocument } from './ImageDocument';
+import { cropDocument, flipDocument, resizeCanvas, resizeImage, revealAllBounds, rotateDocument, trimBounds } from './imageOps';
+import type { Transform } from './transform/geometry';
+import { TransformSession } from './transform/session';
 import { Layer, type LayerProps } from './Layer';
-import { extractPixels, layerAlphaMask, maskToCanvas } from './selection/raster';
+import { createMask, luminance, maskFromAlpha, maskFromSelection, paintMaskValue } from './mask';
+import { extractPixels, layerAlphaMask, maskToCanvas, rasterizeMask, samplePixels } from './selection/raster';
+import { growSelection } from './selection/floodFill';
 import { SelectionMask, type SelectionMode } from './selection/SelectionMask';
 import { Viewport } from './Viewport';
 import { ActionRegistry } from './actions';
@@ -32,6 +47,16 @@ interface EditorEvents {
   view: void;
   settings: EditorSettings;
   selectionOptions: SelectionOptions;
+  /** Přepnutí cíle úprav mezi pixely vrstvy a její maskou. */
+  target: boolean;
+}
+
+/** Kam se kreslí: obrazové pixely aktivní vrstvy, nebo její maska. */
+export interface PaintTarget {
+  layer: Layer;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  kind: PaintTargetKind;
 }
 
 /** Centrální stav aplikace – dokument, historie, pohled, nástroje a akce. */
@@ -51,6 +76,8 @@ export class Editor extends Emitter<EditorEvents> {
   clipboard: { canvas: HTMLCanvasElement; x: number; y: number } | null = null;
   /** Poslední zrušený výběr pro „Znovu vybrat“. */
   private lastSelection: SelectionMask | null = null;
+  /** Úpravy jdou do masky aktivní vrstvy (klik na náhled masky). */
+  maskTarget = false;
 
   private unsubscribeDoc: (() => void) | null = null;
   private layerCounter = 1;
@@ -64,7 +91,11 @@ export class Editor extends Emitter<EditorEvents> {
 
   private bindDocument(): void {
     this.unsubscribeDoc?.();
-    this.unsubscribeDoc = this.doc.on('change', (c) => this.emit('docChange', c));
+    this.unsubscribeDoc = this.doc.on('change', (c) => {
+      // Cíl „maska“ platí jen, dokud ji aktivní vrstva má.
+      if (this.maskTarget && !this.doc.activeLayer?.mask) this.setMaskTarget(false);
+      this.emit('docChange', c);
+    });
   }
 
   setDocument(doc: ImageDocument, fileName = 'bez-nazvu'): void {
@@ -72,6 +103,7 @@ export class Editor extends Emitter<EditorEvents> {
     this.fileName = fileName;
     this.layerCounter = doc.layers.length;
     this.lastSelection = null;
+    this.maskTarget = false;
     this.bindDocument();
     this.history.clear();
     this.emit('document', doc);
@@ -241,28 +273,117 @@ export class Editor extends Emitter<EditorEvents> {
     if (layer) this.setSelection(layerAlphaMask(this.doc, layer), 'Vybrat pixely');
   }
 
+  /** Výběr → Zvětšit (souvisle) / Podobné (v celém obraze) podle tolerance kouzelné hůlky. */
+  growSelection(contiguous: boolean): void {
+    const sel = this.doc.selection;
+    if (!sel) return;
+    const img = samplePixels(this.doc, this.selectionOptions.sampleAll);
+    const grown = growSelection(img.data, this.doc.width, this.doc.height, sel, this.selectionOptions.tolerance, contiguous);
+    this.setSelection(grown, contiguous ? 'Zvětšit výběr' : 'Podobné');
+  }
+
+  /** Upřesnit okraj: vyhlazení, posun okraje (+ rozšířit / − zúžit) a prolnutí v jednom kroku. */
+  refineEdge(o: { smooth: number; shift: number; feather: number }): void {
+    this.modifySelection((m) => {
+      let r = m.smooth(o.smooth);
+      if (o.shift > 0) r = r.expand(o.shift);
+      else if (o.shift < 0) r = r.contract(-o.shift);
+      return r.feather(o.feather);
+    }, 'Upřesnit okraj');
+  }
+
   /** Ořízne plátno na hranice výběru. */
   cropToSelection(): void {
     const b = this.doc.selection?.bounds();
-    if (b) this.execute(new CropCommand(this.doc, b));
+    if (b) this.applyDocState(cropDocument(this.doc, b, true), 'Oříznout');
+  }
+
+  // ---- operace s celým dokumentem (0.4) ----
+
+  /** Zapíše nový stav dokumentu jako jeden krok historie. */
+  applyDocState(state: DocState, label: string): void {
+    this.execute(new DocStateCommand(this.doc, this.doc.captureState(), state, label));
+  }
+
+  resizeImage(width: number, height: number, smooth: boolean): void {
+    if (width === this.doc.width && height === this.doc.height) return;
+    this.applyDocState(resizeImage(this.doc, width, height, smooth), 'Velikost obrazu');
+  }
+
+  resizeCanvas(width: number, height: number, anchor: number, fill: string | null): void {
+    if (width === this.doc.width && height === this.doc.height) return;
+    this.applyDocState(resizeCanvas(this.doc, width, height, anchor, fill), 'Velikost plátna');
+  }
+
+  rotateDocument(quarterTurns: 1 | 2 | 3): void {
+    const labels = { 1: 'Otočit plátno o 90° ↻', 2: 'Otočit plátno o 180°', 3: 'Otočit plátno o 90° ↺' };
+    this.applyDocState(rotateDocument(this.doc, quarterTurns), labels[quarterTurns]);
+  }
+
+  flipDocument(axis: 'h' | 'v'): void {
+    this.applyDocState(flipDocument(this.doc, axis), axis === 'h' ? 'Převrátit plátno vodorovně' : 'Převrátit plátno svisle');
+  }
+
+  cropDocument(rect: Rect, deletePixels: boolean): void {
+    if (rect.width < 1 || rect.height < 1) return;
+    this.applyDocState(cropDocument(this.doc, rect, deletePixels), 'Oříznout');
+  }
+
+  trim(basis: 'transparent' | 'topLeft' | 'bottomRight'): boolean {
+    const b = trimBounds(this.doc, basis);
+    if (!b || (b.width === this.doc.width && b.height === this.doc.height)) return false;
+    this.applyDocState(cropDocument(this.doc, b, true), 'Ořezat');
+    return true;
+  }
+
+  revealAll(): void {
+    const b = revealAllBounds(this.doc);
+    if (b.x !== 0 || b.y !== 0 || b.width !== this.doc.width || b.height !== this.doc.height) {
+      this.applyDocState(cropDocument(this.doc, b, false), 'Odkrýt vše');
+    }
+  }
+
+  /** Úpravy → Transformovat → otočit / převrátit aktivní vrstvu (s výběrem jen vybrané pixely). */
+  transformQuick(kind: 'cw' | 'ccw' | '180' | 'flipH' | 'flipV'): void {
+    const session = TransformSession.start(this);
+    if (!session) return;
+    const t = session.initial;
+    const changes: Record<typeof kind, [Partial<Transform>, string]> = {
+      cw: [{ angle: Math.PI / 2 }, 'Otočit o 90° ↻'],
+      ccw: [{ angle: -Math.PI / 2 }, 'Otočit o 90° ↺'],
+      '180': [{ angle: Math.PI }, 'Otočit o 180°'],
+      flipH: [{ flipX: true }, 'Převrátit vodorovně'],
+      flipV: [{ flipY: true }, 'Převrátit svisle'],
+    };
+    const [patch, label] = changes[kind];
+    session.apply({ ...t, ...patch });
+    session.commit(label);
   }
 
   // ---- úpravy pixelů (omezené výběrem) ----
 
   /**
-   * Změní pixely vrstvy v obdélníku (souřadnice vrstvy) a zapíše krok do historie.
-   * Vrací příkaz (pro složené operace) nebo null, pokud obdélník leží mimo vrstvu.
+   * Změní pixely vrstvy (nebo její masky) v obdélníku (souřadnice vrstvy). Krok do historie se nezapisuje –
+   * vrací se příkaz (pro složené operace) nebo null, pokud obdélník leží mimo vrstvu.
    */
-  paintLayer(layer: Layer, rect: Rect, label: string, draw: (ctx: CanvasRenderingContext2D) => void): PaintCommand | null {
-    const r = clipRect(rect, layer.width, layer.height);
-    if (!r) return null;
-    const before = layer.ctx.getImageData(r.x, r.y, r.width, r.height);
-    layer.ctx.save();
-    draw(layer.ctx);
-    layer.ctx.restore();
-    const after = layer.ctx.getImageData(r.x, r.y, r.width, r.height);
+  paintLayer(
+    layer: Layer,
+    rect: Rect,
+    label: string,
+    draw: (ctx: CanvasRenderingContext2D) => void,
+    target: PaintTargetKind = 'pixels',
+  ): PaintCommand | null {
+    const canvas = target === 'mask' ? layer.mask : layer.canvas;
+    const r = canvas && clipRect(rect, canvas.width, canvas.height);
+    if (!canvas || !r) return null;
+    const ctx = get2d(canvas);
+    const before = ctx.getImageData(r.x, r.y, r.width, r.height);
+    ctx.save();
+    draw(ctx);
+    ctx.restore();
+    const after = ctx.getImageData(r.x, r.y, r.width, r.height);
     this.doc.notifyPixels(layer.id);
-    return new PaintCommand(this.doc, layer.id, r.x, r.y, before, after, label);
+    return new PaintCommand(this.doc, layer.id, r.x, r.y, before, after, label, target);
   }
 
   /** Obdélník výběru (nebo celé vrstvy) v souřadnicích vrstvy. */
@@ -271,11 +392,13 @@ export class Editor extends Emitter<EditorEvents> {
     return b ? { x: b.x - layer.x, y: b.y - layer.y, width: b.width, height: b.height } : { x: 0, y: 0, width: layer.width, height: layer.height };
   }
 
-  /** Vymaže vybrané pixely aktivní vrstvy (bez výběru celou vrstvu). */
+  /** Vymaže vybrané pixely aktivní vrstvy (bez výběru celou vrstvu). V masce vyplní barvou pozadí (jako Photoshop). */
   clearSelection(): void {
-    const layer = this.doc.activeLayer;
+    const t = this.paintTarget();
     const sel = this.doc.selection;
-    if (!layer) return;
+    if (!t) return;
+    if (t.kind === 'mask') return this.fillMask(t, luminance(this.settings.secondaryColor), 'Vymazat');
+    const { layer } = t;
     const cmd = this.paintLayer(layer, this.selectionRectIn(layer), 'Vymazat', (ctx) => {
       if (sel) {
         ctx.globalCompositeOperation = 'destination-out';
@@ -285,11 +408,13 @@ export class Editor extends Emitter<EditorEvents> {
     if (cmd) this.history.push(cmd);
   }
 
-  /** Vyplní výběr (bez výběru celou vrstvu) barvou. */
+  /** Vyplní výběr (bez výběru celou vrstvu) barvou; v masce jasem barvy. */
   fillSelection(color: string, label = 'Vyplnit'): void {
-    const layer = this.doc.activeLayer;
+    const t = this.paintTarget();
     const sel = this.doc.selection;
-    if (!layer) return;
+    if (!t) return;
+    if (t.kind === 'mask') return this.fillMask(t, luminance(color), label);
+    const { layer } = t;
     const rect = this.selectionRectIn(layer);
     const cmd = this.paintLayer(layer, rect, label, (ctx) => {
       if (!sel) {
@@ -306,6 +431,100 @@ export class Editor extends Emitter<EditorEvents> {
       ctx.drawImage(fill, -layer.x, -layer.y);
     });
     if (cmd) this.history.push(cmd);
+  }
+
+  /** Nastaví masku ve výběru (nebo celou) na hodnotu 0..1. */
+  private fillMask(t: PaintTarget, value: number, label: string): void {
+    const sel = this.doc.selection;
+    const { layer } = t;
+    const cmd = this.paintLayer(
+      layer,
+      this.selectionRectIn(layer),
+      label,
+      (ctx) => paintMaskValue(ctx, sel ? maskToCanvas(sel) : null, -layer.x, -layer.y, value),
+      'mask',
+    );
+    if (cmd) this.history.push(cmd);
+  }
+
+  // ---- masky vrstev ----
+
+  setMaskTarget(on: boolean): void {
+    const next = on && !!this.doc.activeLayer?.mask;
+    if (next === this.maskTarget) return;
+    this.maskTarget = next;
+    this.emit('target', next);
+  }
+
+  /** Aktuální cíl úprav (pixely aktivní vrstvy nebo její maska). */
+  paintTarget(): PaintTarget | null {
+    const layer = this.doc.activeLayer;
+    if (!layer) return null;
+    if (this.maskTarget && layer.mask) return { layer, canvas: layer.mask, ctx: get2d(layer.mask), kind: 'mask' };
+    return { layer, canvas: layer.canvas, ctx: layer.ctx, kind: 'pixels' };
+  }
+
+  /**
+   * Přidá masku aktivní vrstvě. Varianty podle Photoshopu: odkrýt / skrýt vše, odkrýt / skrýt výběr,
+   * z průhlednosti. Maska z výběru výběr zruší. Nová maska se stane cílem úprav.
+   */
+  addMask(kind: MaskKind): void {
+    const layer = this.doc.activeLayer;
+    const sel = this.doc.selection;
+    if (!layer || layer.mask) return;
+    const { width, height } = layer;
+    const masks: Record<MaskKind, () => HTMLCanvasElement | null> = {
+      revealAll: () => createMask(width, height, 1),
+      hideAll: () => createMask(width, height, 0),
+      revealSelection: () => (sel ? maskFromSelection(sel, layer, false) : null),
+      hideSelection: () => (sel ? maskFromSelection(sel, layer, true) : null),
+      fromTransparency: () => maskFromAlpha(layer),
+    };
+    const mask = masks[kind]();
+    if (!mask) return;
+    const add = new SetMaskCommand(this.doc, layer.id, null, mask, 'Přidat masku vrstvy');
+    if (sel && (kind === 'revealSelection' || kind === 'hideSelection')) {
+      this.execute(new MacroCommand('Přidat masku vrstvy', [new SetSelectionCommand(this.doc, sel, null, 'Odznačit'), add]));
+    } else this.execute(add);
+    this.setMaskTarget(true);
+  }
+
+  deleteMask(): void {
+    const layer = this.doc.activeLayer;
+    if (layer?.mask) this.execute(new SetMaskCommand(this.doc, layer.id, layer.mask, null, 'Smazat masku vrstvy'));
+  }
+
+  /** Použije masku: skryté pixely se smažou a maska zmizí. */
+  applyMask(): void {
+    const layer = this.doc.activeLayer;
+    const mask = layer?.mask;
+    if (!layer || !mask) return;
+    const paint = layer.maskEnabled
+      ? this.paintLayer(layer, { x: 0, y: 0, width: layer.width, height: layer.height }, 'Použít masku', (ctx) => {
+          ctx.globalCompositeOperation = 'destination-in';
+          ctx.drawImage(mask, 0, 0);
+        })
+      : null;
+    const remove = new SetMaskCommand(this.doc, layer.id, mask, null, 'Použít masku');
+    remove.do();
+    this.history.push(new MacroCommand('Použít masku vrstvy', paint ? [paint, remove] : [remove]));
+  }
+
+  toggleMask(): void {
+    const layer = this.doc.activeLayer;
+    if (!layer?.mask) return;
+    this.setLayerProps(layer.id, { maskEnabled: !layer.maskEnabled }, layer.maskEnabled ? 'Vypnout masku' : 'Zapnout masku');
+  }
+
+  /** Výběr podle masky (Ctrl+klik na náhled masky). */
+  selectionFromMask(layerId?: string): void {
+    const layer = layerId ? this.doc.getLayer(layerId) : this.doc.activeLayer;
+    const mask = layer?.mask;
+    if (!layer || !mask) return;
+    this.setSelection(
+      rasterizeMask(this.doc.width, this.doc.height, (ctx) => ctx.drawImage(mask, layer.x, layer.y)),
+      'Výběr z masky',
+    );
   }
 
   /** Zkopíruje výběr aktivní vrstvy (nebo složeného obrazu) do schránky aplikace. */
@@ -357,6 +576,8 @@ export class Editor extends Emitter<EditorEvents> {
     this.history.push(new MacroCommand('Vrstva vyjmutím', clear ? [clear, add] : [add]));
   }
 }
+
+export type MaskKind = 'revealAll' | 'hideAll' | 'revealSelection' | 'hideSelection' | 'fromTransparency';
 
 export interface SelectionOptions {
   mode: SelectionMode;

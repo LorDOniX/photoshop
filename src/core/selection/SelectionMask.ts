@@ -111,6 +111,19 @@ export class SelectionMask {
     return this.map((a) => 255 - a);
   }
 
+  /** Posun výběru o celé pixely (co vyjede mimo plátno, se ztratí). */
+  translate(dx: number, dy: number): SelectionMask {
+    const { width: w, height: h } = this;
+    const out = new SelectionMask(w, h);
+    const sx0 = Math.max(0, -dx);
+    const sx1 = Math.min(w, w - dx);
+    if (sx1 <= sx0) return out;
+    for (let y = Math.max(0, -dy); y < Math.min(h, h - dy); y++) {
+      out.data.set(this.data.subarray(y * w + sx0, y * w + sx1), (y + dy) * w + sx0 + dx);
+    }
+    return out;
+  }
+
   /** Prolnutí okraje (3× box blur ≈ Gaussovo rozostření). */
   feather(radius: number): SelectionMask {
     const r = Math.round(radius);

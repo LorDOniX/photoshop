@@ -1,8 +1,9 @@
 import { Brush, Eraser } from 'lucide';
-import { PaintCommand } from '../core/commands/layerCommands';
+import { PaintCommand, type PaintTargetKind } from '../core/commands/layerCommands';
 import { clipRect, cloneCanvas, createCanvas, get2d, unionRect, type Rect } from '../core/canvas';
 import type { Editor } from '../core/Editor';
 import type { Layer } from '../core/Layer';
+import { luminance, paintMaskValue } from '../core/mask';
 import { maskToCanvas } from '../core/selection/raster';
 import type { Tool, ToolOptionsUI, ToolPointer } from './Tool';
 import { h } from '../ui/dom';
@@ -12,7 +13,10 @@ import { PAINT_BLEND_MODES, pressureToggles } from './optionParts';
 
 interface Stroke {
   layer: Layer;
-  /** Stav vrstvy před tahem – pro undo a pro opakované skládání při krytí < 100 %. */
+  /** Cíl kreslení – pixely vrstvy, nebo její maska. */
+  target: PaintTargetKind;
+  ctx: CanvasRenderingContext2D;
+  /** Stav cíle před tahem – pro undo a pro opakované skládání při krytí < 100 %. */
   snapshot: HTMLCanvasElement;
   /** Samotný tah při 100 % krytí; na vrstvu se skládá s krytím štětce (tah se tak nepřekrývá sám se sebou). */
   stroke: HTMLCanvasElement;
@@ -22,7 +26,9 @@ interface Stroke {
   opacity: number;
   size: number;
   /** Maska výběru (canvas v souřadnicích dokumentu) – tah se kreslí jen uvnitř. */
-  mask: HTMLCanvasElement | null;
+  selection: HTMLCanvasElement | null;
+  /** Při kreslení do masky: cílová hodnota 0..1 (jas barvy). */
+  maskValue: number;
 }
 
 export class BrushTool implements Tool {
@@ -46,27 +52,33 @@ export class BrushTool implements Tool {
 
   pointerDown(p: ToolPointer): void {
     if (p.button !== 0) return;
-    const layer = this.editor.doc.activeLayer;
-    if (!layer || !layer.visible) return;
-    const { color, brushSize, brushOpacity } = this.editor.settings;
-    const stroke = createCanvas(layer.width, layer.height);
+    const target = this.editor.paintTarget();
+    if (!target || !target.layer.visible) return;
+    const { layer, canvas } = target;
+    const { color, secondaryColor, brushSize, brushOpacity } = this.editor.settings;
+    const isMask = target.kind === 'mask';
+    const stroke = createCanvas(canvas.width, canvas.height);
     const strokeCtx = get2d(stroke);
-    strokeCtx.strokeStyle = color;
-    strokeCtx.fillStyle = color;
+    // V masce na barvě tahu nezáleží (hodnotu určuje jas), jen na jeho alfě.
+    strokeCtx.strokeStyle = strokeCtx.fillStyle = isMask ? '#fff' : color;
     strokeCtx.lineWidth = brushSize;
     strokeCtx.lineCap = 'round';
     strokeCtx.lineJoin = 'round';
     const local = { x: p.x - layer.x, y: p.y - layer.y };
     this.current = {
       layer,
-      snapshot: cloneCanvas(layer.canvas),
+      target: target.kind,
+      ctx: target.ctx,
+      snapshot: cloneCanvas(canvas),
       stroke,
       strokeCtx,
       last: local,
       bounds: null,
       opacity: brushOpacity,
       size: brushSize,
-      mask: this.editor.doc.selection ? maskToCanvas(this.editor.doc.selection) : null,
+      selection: this.editor.doc.selection ? maskToCanvas(this.editor.doc.selection) : null,
+      // Guma v masce kreslí barvou pozadí (jako ve Photoshopu).
+      maskValue: luminance(this.mode === 'eraser' ? secondaryColor : color),
     };
     this.segment(local, local);
   }
@@ -85,10 +97,9 @@ export class BrushTool implements Tool {
     if (!s?.bounds) return;
     const { x, y, width, height } = s.bounds;
     const before = get2d(s.snapshot).getImageData(x, y, width, height);
-    const after = s.layer.ctx.getImageData(x, y, width, height);
-    this.editor.history.push(
-      new PaintCommand(this.editor.doc, s.layer.id, x, y, before, after, this.mode === 'eraser' ? 'Guma' : 'Štětec'),
-    );
+    const after = s.ctx.getImageData(x, y, width, height);
+    const label = `${this.mode === 'eraser' ? 'Guma' : 'Štětec'}${s.target === 'mask' ? ' (maska)' : ''}`;
+    this.editor.history.push(new PaintCommand(this.editor.doc, s.layer.id, x, y, before, after, label, s.target));
   }
 
   deactivate(): void {
@@ -118,35 +129,41 @@ export class BrushTool implements Tool {
         width: Math.abs(a.x - b.x) + r * 2,
         height: Math.abs(a.y - b.y) + r * 2,
       },
-      s.layer.width,
-      s.layer.height,
+      s.snapshot.width,
+      s.snapshot.height,
     );
     if (!dirty) return;
     s.bounds = unionRect(s.bounds, dirty);
 
     // Přeskládání jen dotčené oblasti: původní stav + tah s krytím štětce.
     const { x, y, width, height } = dirty;
-    if (s.mask) {
+    if (s.selection) {
       // Ořez tahu výběrem – jen v dotčené oblasti (clip), zbytek tahu je už oříznutý.
       ctx.save();
       ctx.beginPath();
       ctx.rect(x, y, width, height);
       ctx.clip();
       ctx.globalCompositeOperation = 'destination-in';
-      ctx.drawImage(s.mask, -s.layer.x, -s.layer.y);
+      ctx.drawImage(s.selection, -s.layer.x, -s.layer.y);
       ctx.restore();
     }
-    const lc = s.layer.ctx;
+    const lc = s.ctx;
     lc.save();
     lc.clearRect(x, y, width, height);
     lc.drawImage(s.snapshot, x, y, width, height, x, y, width, height);
-    lc.globalAlpha = s.opacity;
-    lc.globalCompositeOperation = this.mode === 'eraser' ? 'destination-out' : 'source-over';
-    lc.drawImage(s.stroke, x, y, width, height, x, y, width, height);
+    if (s.target === 'mask') {
+      lc.beginPath();
+      lc.rect(x, y, width, height);
+      lc.clip();
+      paintMaskValue(lc, s.stroke, 0, 0, s.maskValue, s.opacity);
+    } else {
+      lc.globalAlpha = s.opacity;
+      lc.globalCompositeOperation = this.mode === 'eraser' ? 'destination-out' : 'source-over';
+      lc.drawImage(s.stroke, x, y, width, height, x, y, width, height);
+    }
     lc.restore();
     this.editor.doc.notifyPixels(s.layer.id);
   }
-
   drawOverlay(ctx: CanvasRenderingContext2D, editor: Editor): void {
     if (!editor.pointer) return;
     const { x, y } = editor.viewport.toScreen(editor.pointer.x, editor.pointer.y);

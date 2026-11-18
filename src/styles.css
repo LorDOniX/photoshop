@@ -781,6 +781,10 @@ button {
   flex: none;
   border: 1px solid #2a2a2a;
 }
+.thumb.targeted {
+  outline: 2px solid #e8e8e8;
+  outline-offset: 1px;
+}
 .layer-name {
   flex: 1;
   overflow: hidden;
@@ -847,7 +851,8 @@ button {
   font-size: 14px;
   font-weight: 600;
 }
-.dialog label {
+.dialog label,
+.dialog .dialog-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
@@ -856,6 +861,41 @@ button {
 .dialog input,
 .dialog select {
   width: 140px;
+}
+.dialog-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.dialog-input input {
+  width: 110px;
+}
+.dialog label.dialog-check {
+  justify-content: flex-start;
+  gap: 8px;
+}
+.dialog .dialog-check input {
+  width: auto;
+  height: auto;
+  accent-color: var(--accent);
+}
+.dialog-note {
+  font-size: 11px;
+}
+.anchor-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 22px);
+  gap: 2px;
+}
+.anchor-cell {
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  background: var(--input);
+  border: 1px solid #5f5f5f;
+}
+.anchor-cell.active {
+  background: var(--accent);
 }
 .dialog-buttons {
   display: flex;

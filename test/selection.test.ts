@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { floodSelect } from '../src/core/selection/floodFill';
+import { floodSelect, growSelection } from '../src/core/selection/floodFill';
 import { findLiveWire } from '../src/core/selection/livewire';
 import { SelectionMask } from '../src/core/selection/SelectionMask';
 
@@ -38,6 +38,12 @@ describe('SelectionMask', () => {
     expect(f.get(5, 10)).toBeLessThan(255);
   });
 
+  it('posun výběru; co vyjede z plátna, se ztratí', () => {
+    expect(rect(2, 3, 4, 5).translate(3, -1).bounds()).toEqual({ x: 5, y: 2, width: 4, height: 5 });
+    expect(rect(16, 0, 4, 4).translate(2, 0).bounds()).toEqual({ x: 18, y: 0, width: 2, height: 4 });
+    expect(rect(0, 0, 4, 4).translate(-10, 0).isEmpty()).toBe(true);
+  });
+
   it('obrys obdélníku = 4 sloučené úsečky', () => {
     const segs = Array.from(rect(2, 3, 4, 5).outline());
     expect(segs).toEqual([2, 3, 6, 3, 2, 8, 6, 8, 2, 3, 2, 8, 6, 3, 6, 8]);
@@ -59,6 +65,27 @@ describe('floodSelect (kouzelná hůlka)', () => {
 
   it('tolerance zahrne i podobnou barvu', () => {
     expect(count(floodSelect(img, W, H, 2, 2, 255, true))).toBe(W * H);
+  });
+});
+
+describe('growSelection (Zvětšit / Podobné)', () => {
+  // Levá polovina šedá 100, pravá šedá 200, uprostřed v pravé polovině ostrůvek 100.
+  const img = new Uint8ClampedArray(W * H * 4);
+  for (let p = 0; p < W * H; p++) {
+    const x = p % W;
+    const y = Math.floor(p / W);
+    const v = x < 10 || (x >= 14 && x < 16 && y >= 8 && y < 10) ? 100 : 200;
+    img.set([v, v, v, 255], p * 4);
+  }
+
+  it('Zvětšit přidá jen souvisle navazující podobné pixely', () => {
+    const grown = growSelection(img, W, H, rect(2, 2, 2, 2), 10, true);
+    expect(grown.bounds()).toEqual({ x: 0, y: 0, width: 10, height: H });
+  });
+
+  it('Podobné přidá podobné pixely v celém obraze', () => {
+    const similar = growSelection(img, W, H, rect(2, 2, 2, 2), 10, false);
+    expect(count(similar)).toBe(10 * H + 4);
   });
 });
 

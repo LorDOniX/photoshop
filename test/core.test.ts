@@ -3,17 +3,20 @@ import { describe, expect, it, vi } from 'vitest';
 // Vrstvy v Node nemají skutečný canvas – pro strukturální testy stačí atrapa.
 vi.mock('../src/core/canvas', () => ({
   createCanvas: (width: number, height: number) => ({ width, height }),
+  cloneCanvas: (c: { width: number; height: number }) => ({ ...c }),
   get2d: () => ({}),
 }));
 
 import { History, type Command } from '../src/core/History';
 import { ImageDocument } from '../src/core/ImageDocument';
 import { Layer } from '../src/core/Layer';
+import { luminance } from '../src/core/mask';
 import {
   AddLayerCommand,
   MoveLayerCommand,
   RemoveLayerCommand,
   SetLayerPropsCommand,
+  SetMaskCommand,
 } from '../src/core/commands/layerCommands';
 
 function counter(log: string[], name: string): Command {
@@ -106,5 +109,43 @@ describe('příkazy vrstev', () => {
     h.goTo(0);
     expect(order(doc)).toEqual(['a', 'b', 'c']);
     expect(doc.getLayer('c')).toMatchObject({ opacity: 1, visible: true });
+  });
+});
+
+describe('masky vrstev', () => {
+  const fakeMask = () => ({ width: 10, height: 10 }) as HTMLCanvasElement;
+
+  it('přidání masky ji zapne, undo vrátí stav bez masky i původní zapnutí', () => {
+    const doc = docWithLayers('a');
+    const layer = doc.getLayer('a')!;
+    layer.maskEnabled = false;
+    const mask = fakeMask();
+    const h = new History();
+    h.execute(new SetMaskCommand(doc, 'a', null, mask, 'Přidat masku'));
+    expect(layer.mask).toBe(mask);
+    expect(layer.hasActiveMask).toBe(true);
+    h.undo();
+    expect(layer.mask).toBeNull();
+    expect(layer.maskEnabled).toBe(false);
+  });
+
+  it('smazání masky jde vrátit', () => {
+    const doc = docWithLayers('a');
+    const mask = fakeMask();
+    const h = new History();
+    h.execute(new SetMaskCommand(doc, 'a', null, mask, 'Přidat'));
+    h.execute(new SetLayerPropsCommand(doc, 'a', { maskEnabled: true }, { maskEnabled: false }, 'Vypnout'));
+    expect(doc.getLayer('a')!.hasActiveMask).toBe(false);
+    h.execute(new SetMaskCommand(doc, 'a', mask, null, 'Smazat'));
+    expect(doc.getLayer('a')!.mask).toBeNull();
+    h.undo();
+    expect(doc.getLayer('a')!.mask).toBe(mask);
+    expect(doc.getLayer('a')!.maskEnabled).toBe(false);
+  });
+
+  it('hodnota masky z barvy = jas (černá skrývá, bílá odkrývá)', () => {
+    expect(luminance('#000000')).toBe(0);
+    expect(luminance('#ffffff')).toBe(1);
+    expect(luminance('#808080')).toBeCloseTo(0.502, 2);
   });
 });

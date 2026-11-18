@@ -8,6 +8,8 @@ import { Layer } from './core/Layer';
 import { baseName } from './io/files';
 import { PROJECT_EXTENSION, loadProject } from './io/project';
 import { BrushTool } from './tools/BrushTool';
+import { CropTool } from './tools/CropTool';
+import { TransformTool } from './tools/TransformTool';
 import { MoveTool } from './tools/MoveTool';
 import { HandTool, ZoomTool } from './tools/NavigationTools';
 import { createPlaceholderTools } from './tools/PlaceholderTools';
@@ -15,6 +17,7 @@ import { LassoTool } from './tools/selection/LassoTool';
 import { MagicWandTool } from './tools/selection/MagicWandTool';
 import { MagneticLassoTool } from './tools/selection/MagneticLassoTool';
 import { MarqueeTool } from './tools/selection/MarqueeTool';
+import { QuickSelectTool } from './tools/selection/QuickSelectTool';
 import { CanvasView } from './ui/CanvasView';
 import { Dock, TabbedPanel } from './ui/Dock';
 import { DocumentTabs, StatusBar } from './ui/DocumentTabs';
@@ -39,9 +42,12 @@ editor.tools.register(
   new LassoTool(editor, 'polygon'),
   new MagneticLassoTool(editor),
   new MagicWandTool(editor),
+  new QuickSelectTool(editor),
   new BrushTool(editor, 'brush'),
   new BrushTool(editor, 'eraser'),
   new HandTool(editor),
+  new CropTool(editor),
+  new TransformTool(editor),
   new ZoomTool(editor),
   ...createPlaceholderTools(),
 );
@@ -124,7 +130,7 @@ const historyGroup = new TabbedPanel(editor.actions, [
   { id: 'swatches', title: 'Vzorník', element: createSwatchesPanel(editor), menu: menus.panels.swatches },
 ]);
 const layersGroup = new TabbedPanel(editor.actions, [
-  { id: 'layers', title: 'Vrstvy', element: new LayersPanel(editor, menus.layerContext).element, menu: menus.panels.layers },
+  { id: 'layers', title: 'Vrstvy', element: new LayersPanel(editor, { row: menus.layerContext, mask: menus.maskContext }).element, menu: menus.panels.layers },
   { id: 'channels', title: 'Kanály', element: createChannelsPanel(), menu: menus.panels.channels },
   { id: 'paths', title: 'Cesty', element: createPathsPanel(), menu: menus.panels.paths },
 ]);

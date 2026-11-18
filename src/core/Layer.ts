@@ -1,4 +1,4 @@
-import { createCanvas, get2d } from './canvas';
+import { cloneCanvas, createCanvas, get2d } from './canvas';
 import { createId } from './id';
 
 export type BlendMode =
@@ -48,6 +48,8 @@ export interface LayerProps {
   /** Posun vrstvy v souřadnicích dokumentu. */
   x: number;
   y: number;
+  /** Maska se uplatňuje (Shift+klik na náhled masky ji vypne). */
+  maskEnabled: boolean;
 }
 
 export interface LayerInit extends Partial<LayerProps> {
@@ -63,8 +65,14 @@ export class Layer implements LayerProps {
   blendMode: BlendMode = 'source-over';
   x = 0;
   y = 0;
-  readonly canvas: HTMLCanvasElement;
-  readonly ctx: CanvasRenderingContext2D;
+  maskEnabled = true;
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  /**
+   * Rastrová maska vrstvy: canvas stejné velikosti a pozice jako vrstva, viditelnost = **alfa** masky
+   * (0 = skryto, 255 = odkryto). Posouvá se spolu s vrstvou.
+   */
+  mask: HTMLCanvasElement | null = null;
 
   constructor(width: number, height: number, init: LayerInit = {}) {
     const { id, ...props } = init;
@@ -78,13 +86,25 @@ export class Layer implements LayerProps {
     return this.canvas.width;
   }
 
+  /** Nahradí plátno vrstvy (jiná velikost po transformaci apod.). */
+  setCanvas(canvas: HTMLCanvasElement): void {
+    if (canvas === this.canvas) return;
+    this.canvas = canvas;
+    this.ctx = get2d(canvas);
+  }
+
   get height(): number {
     return this.canvas.height;
   }
 
+  /** Maska existuje a je zapnutá. */
+  get hasActiveMask(): boolean {
+    return this.mask !== null && this.maskEnabled;
+  }
+
   getProps(): LayerProps {
-    const { name, visible, opacity, blendMode, x, y } = this;
-    return { name, visible, opacity, blendMode, x, y };
+    const { name, visible, opacity, blendMode, x, y, maskEnabled } = this;
+    return { name, visible, opacity, blendMode, x, y, maskEnabled };
   }
 
   setProps(props: Partial<LayerProps>): void {
@@ -96,6 +116,7 @@ export class Layer implements LayerProps {
   duplicate(): Layer {
     const copy = new Layer(this.width, this.height, { ...this.getProps(), name: `${this.name} kopie` });
     copy.ctx.drawImage(this.canvas, 0, 0);
+    if (this.mask) copy.mask = cloneCanvas(this.mask);
     return copy;
   }
 }

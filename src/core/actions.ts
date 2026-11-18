@@ -21,6 +21,7 @@ export function placeholderAction(id: string, label: string, ...shortcuts: strin
 const CODE_KEYS: Record<string, string> = {
   BracketLeft: '[',
   BracketRight: ']',
+  Backslash: '\\',
   Equal: '=',
   Minus: '-',
   NumpadAdd: '+',

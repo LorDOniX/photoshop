@@ -1,17 +1,21 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { createCanvas, get2d } from '../core/canvas';
 import { ImageDocument } from '../core/ImageDocument';
 import { Layer, type LayerProps } from '../core/Layer';
 import { canvasToBlob } from './files';
 
 export const PROJECT_EXTENSION = '.ptsp';
 const FORMAT = 'photoshop-ts-project';
-const VERSION = 1;
+/** 1 = vrstvy, 2 = + masky vrstev. */
+const VERSION = 2;
 
-interface LayerManifest extends LayerProps {
+interface LayerManifest extends Omit<LayerProps, 'maskEnabled'> {
   id: string;
   width: number;
   height: number;
   file: string;
+  /** Od verze 2. Hodnota masky je v alfa kanálu PNG. */
+  mask?: { file: string; enabled: boolean };
 }
 
 interface ProjectManifest {
@@ -24,18 +28,37 @@ interface ProjectManifest {
   layers: LayerManifest[];
 }
 
+async function toPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
+  return new Uint8Array(await (await canvasToBlob(canvas, 'image/png')).arrayBuffer());
+}
+
+async function fromPng(bytes: Uint8Array, target: HTMLCanvasElement): Promise<void> {
+  const bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'image/png' }), {
+    premultiplyAlpha: 'none',
+    colorSpaceConversion: 'none',
+  });
+  get2d(target).drawImage(bitmap, 0, 0);
+  bitmap.close();
+}
+
 /**
- * Projekt = ZIP s `project.json` (struktura, vlastnosti vrstev) a bezeztrátovými PNG vrstvami.
- * Formát je verzovaný, aby šlo později přidat masky, výběry atd.
+ * Projekt = ZIP s `project.json` (struktura, vlastnosti vrstev) a bezeztrátovými PNG vrstvami a maskami.
+ * Formát je verzovaný; starší verze se dají dál otevírat.
  */
 export async function saveProject(doc: ImageDocument): Promise<Blob> {
   const files: Record<string, Uint8Array> = {};
   const layers: LayerManifest[] = [];
   for (const layer of doc.layers) {
     const file = `layers/${layer.id}.png`;
-    const png = await canvasToBlob(layer.canvas, 'image/png');
-    files[file] = new Uint8Array(await png.arrayBuffer());
-    layers.push({ id: layer.id, width: layer.width, height: layer.height, file, ...layer.getProps() });
+    files[file] = await toPng(layer.canvas);
+    const { maskEnabled, ...props } = layer.getProps();
+    const entry: LayerManifest = { id: layer.id, width: layer.width, height: layer.height, file, ...props };
+    if (layer.mask) {
+      const maskFile = `layers/${layer.id}.mask.png`;
+      files[maskFile] = await toPng(layer.mask);
+      entry.mask = { file: maskFile, enabled: maskEnabled };
+    }
+    layers.push(entry);
   }
   const manifest: ProjectManifest = {
     format: FORMAT,
@@ -64,13 +87,14 @@ export async function loadProject(data: ArrayBuffer): Promise<ImageDocument> {
     const bytes = files[lm.file];
     if (!bytes) throw new Error(`Chybí data vrstvy ${lm.name}.`);
     const { id, name, visible, opacity, blendMode, x, y } = lm;
-    const layer = new Layer(lm.width, lm.height, { id, name, visible, opacity, blendMode, x, y });
-    const bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'image/png' }), {
-      premultiplyAlpha: 'none',
-      colorSpaceConversion: 'none',
-    });
-    layer.ctx.drawImage(bitmap, 0, 0);
-    bitmap.close();
+    const layer = new Layer(lm.width, lm.height, { id, name, visible, opacity, blendMode, x, y, maskEnabled: lm.mask?.enabled ?? true });
+    await fromPng(bytes, layer.canvas);
+    if (lm.mask) {
+      const maskBytes = files[lm.mask.file];
+      if (!maskBytes) throw new Error(`Chybí maska vrstvy ${lm.name}.`);
+      layer.mask = createCanvas(lm.width, lm.height);
+      await fromPng(maskBytes, layer.mask);
+    }
     doc.insertLayer(layer);
   }
   doc.setActive(manifest.activeLayerId);

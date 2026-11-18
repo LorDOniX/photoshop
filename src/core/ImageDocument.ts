@@ -105,10 +105,61 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
     this.changed({ kind: 'props', layerId: id });
   }
 
+  /** Nastaví / odebere masku vrstvy (null = bez masky). */
+  setLayerMask(id: string, mask: HTMLCanvasElement | null): void {
+    this.layers[this.requireIndex(id)].mask = mask;
+    this.changed({ kind: 'props', layerId: id });
+  }
+
   /** Oznámí změnu pixelů vrstvy (překreslení, náhledy). */
   notifyPixels(layerId: string): void {
     this.changed({ kind: 'pixels', layerId });
   }
+
+  /** Nahradí plátno, masku a pozici vrstvy (transformace, přesun pixelů, změna velikosti). */
+  setLayerState(id: string, state: LayerState): void {
+    const layer = this.layers[this.requireIndex(id)];
+    layer.setCanvas(state.canvas);
+    layer.mask = state.mask;
+    layer.x = state.x;
+    layer.y = state.y;
+    this.changed({ kind: 'props', layerId: id });
+  }
+
+  /** Stav celého dokumentu (rozměry, plátna vrstev, výběr) – reference, ne kopie. */
+  captureState(): DocState {
+    return {
+      width: this.width,
+      height: this.height,
+      selection: this.selection,
+      layers: new Map(this.layers.map((l) => [l.id, captureLayer(l)])),
+    };
+  }
+
+  applyState(state: DocState): void {
+    if (state.width !== this.width || state.height !== this.height) this.resize(state.width, state.height);
+    for (const [id, ls] of state.layers) if (this.getLayer(id)) this.setLayerState(id, ls);
+    this.setSelection(state.selection);
+  }
+}
+
+/** Plátno, maska a pozice vrstvy. Plátna se při operacích nahrazují novými, proto stačí reference. */
+export interface LayerState {
+  canvas: HTMLCanvasElement;
+  mask: HTMLCanvasElement | null;
+  x: number;
+  y: number;
+}
+
+export interface DocState {
+  width: number;
+  height: number;
+  selection: SelectionMask | null;
+  layers: Map<string, LayerState>;
+}
+
+export function captureLayer(layer: Layer): LayerState {
+  return { canvas: layer.canvas, mask: layer.mask, x: layer.x, y: layer.y };
 }
 
 export function createBlankDocument(width: number, height: number, background: string | null): ImageDocument {

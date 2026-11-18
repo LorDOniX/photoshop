@@ -5,6 +5,7 @@ import type { Bounds, SelectionMode } from '../../core/selection/SelectionMask';
 import type { IconNode } from '../../ui/icons';
 import type { Tool, ToolOptionsUI, ToolPointer } from '../Tool';
 import { selectionOptionsUI, strokeDashed } from './selectionOptions';
+import { nudgeSelection, OutlineDrag, startsOutlineMove } from './outlineMove';
 
 /** Tah kratší než tento počet px obrazovky je klik (= odznačit). */
 const CLICK_TOLERANCE = 3;
@@ -33,6 +34,7 @@ export class MarqueeTool implements Tool {
   readonly shortcut = 'M';
   readonly cursor = 'crosshair';
   private drag: Drag | null = null;
+  private outline: OutlineDrag | null = null;
 
   constructor(
     private readonly editor: Editor,
@@ -45,6 +47,10 @@ export class MarqueeTool implements Tool {
 
   pointerDown(p: ToolPointer): void {
     if (p.button !== 0) return;
+    if (startsOutlineMove(this.editor, p)) {
+      this.outline = new OutlineDrag(this.editor, p.x, p.y);
+      return;
+    }
     const mode = this.editor.selectionModeFor(p);
     const o = this.editor.selectionOptions;
     if (o.style === 'size') {
@@ -71,6 +77,7 @@ export class MarqueeTool implements Tool {
   }
 
   pointerMove(p: ToolPointer): void {
+    if (this.outline) return this.outline.move(p);
     const d = this.drag;
     if (!d) return;
     d.x = Math.round(p.x);
@@ -83,6 +90,12 @@ export class MarqueeTool implements Tool {
   }
 
   pointerUp(): void {
+    if (this.outline) {
+      const moved = this.outline.end();
+      this.outline = null;
+      if (!moved) this.editor.deselect();
+      return;
+    }
     const d = this.drag;
     this.drag = null;
     if (!d) return;
@@ -105,7 +118,7 @@ export class MarqueeTool implements Tool {
       this.editor.notifyView();
       return true;
     }
-    return false;
+    return !this.drag && nudgeSelection(this.editor, e);
   }
 
   private commit(rect: Bounds, mode: SelectionMode): void {
