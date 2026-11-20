@@ -4,6 +4,7 @@ import { maskToCanvas, rasterizeMask } from './selection/raster';
 import type { SelectionMask } from './selection/SelectionMask';
 import type { Bounds } from './selection/SelectionMask';
 import { compositeDocument } from '../render/composite';
+import { refitMask, renderText } from './text';
 
 /*
  * Operace s celým dokumentem. Každá vrací NOVÝ stav (nová plátna), původní zůstává beze změny –
@@ -12,7 +13,8 @@ import { compositeDocument } from '../render/composite';
 
 function mapLayers(doc: ImageDocument, fn: (s: LayerState) => LayerState): Map<string, LayerState> {
   const out = new Map<string, LayerState>();
-  for (const l of doc.layers) out.set(l.id, fn({ canvas: l.canvas, mask: l.mask, x: l.x, y: l.y }));
+  // Záhlaví skupin nemají pixely – zůstávají beze změny.
+  for (const l of doc.layers) if (!l.isGroup) out.set(l.id, fn({ canvas: l.canvas, mask: l.mask, x: l.x, y: l.y }));
   return out;
 }
 
@@ -41,10 +43,21 @@ export function resizeImage(doc: ImageDocument, width: number, height: number, s
       ctx.imageSmoothingEnabled = smooth;
       ctx.drawImage(c, 0, 0, ctx.canvas.width, ctx.canvas.height);
     });
+  const layers = mapLayers(doc, (s) => ({ canvas: scale(s.canvas), mask: s.mask && scale(s.mask), x: Math.round(s.x * sx), y: Math.round(s.y * sy) }));
+  // Textové vrstvy zůstanou textem – písmo se zvětší a text se vykreslí znovu (ostře).
+  for (const l of doc.layers) {
+    const text = l.text;
+    const s = layers.get(l.id);
+    if (!text || !s) continue;
+    const canvas = renderText({ ...text, size: Math.max(1, Math.round(text.size * ((sx + sy) / 2) * 10) / 10) });
+    const rect = { x: s.x, y: s.y, width: canvas.width, height: canvas.height };
+    const mask = s.mask && refitMask(s.mask, { x: s.x, y: s.y, width: s.mask.width, height: s.mask.height }, rect);
+    layers.set(l.id, { canvas, mask, x: s.x, y: s.y });
+  }
   return {
     width,
     height,
-    layers: mapLayers(doc, (s) => ({ canvas: scale(s.canvas), mask: s.mask && scale(s.mask), x: Math.round(s.x * sx), y: Math.round(s.y * sy) })),
+    layers,
     selection: mapSelection(doc.selection, width, height, (ctx, src) => {
       ctx.imageSmoothingEnabled = smooth;
       ctx.drawImage(src, 0, 0, width, height);
@@ -220,6 +233,7 @@ export function revealAllBounds(doc: ImageDocument): Bounds {
   let x1 = doc.width;
   let y1 = doc.height;
   for (const l of doc.layers) {
+    if (l.isGroup) continue;
     x0 = Math.min(x0, l.x);
     y0 = Math.min(y0, l.y);
     x1 = Math.max(x1, l.x + l.width);

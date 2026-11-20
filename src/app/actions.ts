@@ -2,11 +2,16 @@ import type { Action } from '../core/actions';
 import type { Editor } from '../core/Editor';
 import { createBlankDocument } from '../core/ImageDocument';
 import { mergeDownTarget, visibleLayers } from '../core/merge';
+import { savePreferences } from './preferences';
+
+const MB = 1024 * 1024;
+import type { StrokePosition } from '../core/paint/stroke';
 import type { SelectionMask } from '../core/selection/SelectionMask';
 import { exportImage, type ExportFormat } from '../io/export';
-import { baseName, canvasToBlob, downloadBlob, pickFile } from '../io/files';
+import { baseName, canvasToBlob, downloadBlob, pickFile, pickFiles } from '../io/files';
 import { PROJECT_EXTENSION, saveProject } from '../io/project';
 import { confirmDialog, promptNumber, showForm, showNewDocumentDialog } from '../ui/dialogs';
+import type { TextTool } from '../tools/TextTool';
 import type { TransformTool } from '../tools/TransformTool';
 
 /** Kopie do systémové schránky (aby šlo vkládat i do jiných aplikací); selhání se ignoruje. */
@@ -27,6 +32,8 @@ export interface AppContext {
   fitView(allowUpscale: boolean): void;
   rulers: { visible: boolean };
   showPanel(id: string): void;
+  /** Zavře záložku (s dotazem, pokud má neuložené změny). */
+  closeDocument(id: string): Promise<void>;
 }
 
 /** Funkční akce aplikace (menu + klávesové zkratky). */
@@ -34,8 +41,11 @@ export function registerActions(editor: Editor, app: AppContext): void {
   const hasLayer = () => editor.doc.activeLayer !== null;
   const hasSelection = () => editor.doc.selection !== null;
   const hasMask = () => !!editor.doc.activeLayer?.mask;
+  /** Aktivní vrstva s pixely (ne skupina). */
+  const hasPixelLayer = () => !!editor.doc.activeLayer && !editor.doc.activeLayer.isGroup;
   const transformTool = () => editor.tools.get('transform') as TransformTool | undefined;
   let refine = { smooth: 0, feather: 0, shift: 0 };
+  let stroke: { width: number; position: StrokePosition; opacity: number } = { width: 3, position: 'center', opacity: 100 };
   /** Výběr → Upravit → … (dialog s jedním číslem). */
   const modifyAction = (
     id: string,
@@ -58,10 +68,13 @@ export function registerActions(editor: Editor, app: AppContext): void {
       },
     };
   };
-  const activeIndex = () => (editor.doc.activeLayerId ? editor.doc.indexOf(editor.doc.activeLayerId) : -1);
   const exportAs = async (format: ExportFormat) => {
     const blob = await exportImage(editor.doc, format);
-    downloadBlob(blob, `${editor.fileName}.${format === 'png' ? 'png' : 'jpg'}`);
+    if (format === 'webp' && blob.type !== 'image/webp') {
+      alert('Tento prohlížeč neumí ukládat WEBP. Použijte PNG nebo JPG.');
+      return;
+    }
+    downloadBlob(blob, `${editor.fileName}.${format === 'jpeg' ? 'jpg' : format}`);
   };
   const view = (fn: () => void) => () => {
     fn();
@@ -76,7 +89,7 @@ export function registerActions(editor: Editor, app: AppContext): void {
       shortcuts: ['Ctrl+Alt+N'],
       run: async () => {
         const opts = await showNewDocumentDialog({ width: editor.doc.width, height: editor.doc.height });
-        if (opts) editor.setDocument(createBlankDocument(opts.width, opts.height, opts.background));
+        if (opts) editor.openDocument(createBlankDocument(opts.width, opts.height, opts.background));
       },
     },
     {
@@ -84,8 +97,8 @@ export function registerActions(editor: Editor, app: AppContext): void {
       label: 'Otevřít…',
       shortcuts: ['Ctrl+O'],
       run: async () => {
-        const file = await pickFile(`image/*,${PROJECT_EXTENSION}`);
-        if (file) await app.openFile(file);
+        // Každý soubor se otevře v nové záložce.
+        for (const file of await pickFiles(`image/*,${PROJECT_EXTENSION}`)) await app.openFile(file);
       },
     },
     {
@@ -101,10 +114,16 @@ export function registerActions(editor: Editor, app: AppContext): void {
       id: 'file.save',
       label: `Uložit projekt (${PROJECT_EXTENSION})`,
       shortcuts: ['Ctrl+S'],
-      run: async () => downloadBlob(await saveProject(editor.doc), `${editor.fileName}${PROJECT_EXTENSION}`),
+      run: async () => {
+        const session = editor.session;
+        downloadBlob(await saveProject(session.doc), `${session.fileName}${PROJECT_EXTENSION}`);
+        editor.markSaved(session);
+      },
     },
+    { id: 'file.close', label: 'Zavřít', run: () => app.closeDocument(editor.session.id) },
     { id: 'file.exportPng', label: 'PNG', shortcuts: ['Ctrl+Alt+S'], run: () => exportAs('png') },
     { id: 'file.exportJpeg', label: 'JPG', run: () => exportAs('jpeg') },
+    { id: 'file.exportWebp', label: 'WEBP', run: () => exportAs('webp') },
 
     // ---- Úpravy ----
     {
@@ -175,6 +194,64 @@ export function registerActions(editor: Editor, app: AppContext): void {
       shortcuts: ['Ctrl+Backspace', 'Ctrl+Delete'],
       run: () => editor.fillSelection(editor.settings.secondaryColor, 'Vyplnit barvou pozadí'),
       isEnabled: hasLayer,
+    },
+
+    {
+      id: 'edit.stroke',
+      label: 'Obrys…',
+      isEnabled: hasPixelLayer,
+      run: async () => {
+        const v = await showForm('Obrys', [
+          { kind: 'number', key: 'width', label: 'Šířka', value: stroke.width, min: 1, max: 250, step: 1, unit: 'px' },
+          {
+            kind: 'select',
+            key: 'position',
+            label: 'Umístění',
+            value: stroke.position,
+            options: [
+              { value: 'inside', label: 'Uvnitř' },
+              { value: 'center', label: 'Na střed' },
+              { value: 'outside', label: 'Vně' },
+            ],
+          },
+          { kind: 'number', key: 'opacity', label: 'Krytí', value: stroke.opacity, min: 1, max: 100, step: 1, unit: '%' },
+          { kind: 'note', key: 'n', label: editor.doc.selection ? 'Obtáhne okraj výběru barvou popředí.' : 'Bez výběru obtáhne okraj obsahu vrstvy barvou popředí.' },
+        ]);
+        if (!v) return;
+        stroke = { width: Math.round(Number(v.width)), position: v.position as StrokePosition, opacity: Number(v.opacity) };
+        if (!editor.strokeSelection({ ...stroke, opacity: stroke.opacity / 100, color: editor.settings.color })) alert('Není co obtáhnout.');
+      },
+    },
+
+    {
+      id: 'edit.preferences',
+      label: 'Předvolby…',
+      shortcuts: ['Ctrl+K'],
+      run: async () => {
+        const v = await showForm('Předvolby', [
+          {
+            kind: 'number',
+            key: 'historyMb',
+            label: 'Paměť pro historii (na dokument)',
+            value: Math.round(editor.historyMemoryLimit / MB),
+            min: 50,
+            max: 16384,
+            step: 1,
+            unit: 'MB',
+          },
+          { kind: 'note', key: 'n', label: 'Nad limitem se zahazují nejstarší kroky historie. Větší limit = delší historie, ale víc paměti prohlížeče.' },
+        ]);
+        if (!v) return;
+        const bytes = Math.max(50, Number(v.historyMb)) * MB;
+        editor.setHistoryMemoryLimit(bytes);
+        savePreferences({ historyMemoryLimit: bytes });
+      },
+    },
+    {
+      id: 'history.clear',
+      label: 'Vymazat historii',
+      run: () => editor.clearHistory(),
+      isEnabled: () => editor.history.entries.length > 0,
     },
 
     // ---- Obraz ----
@@ -291,7 +368,7 @@ export function registerActions(editor: Editor, app: AppContext): void {
       label: 'Volná transformace',
       shortcuts: ['Ctrl+Alt+T'],
       run: () => void transformTool()?.begin(false),
-      isEnabled: hasLayer,
+      isEnabled: hasPixelLayer,
     },
     {
       id: 'select.transform',
@@ -299,14 +376,15 @@ export function registerActions(editor: Editor, app: AppContext): void {
       run: () => void transformTool()?.begin(true),
       isEnabled: hasSelection,
     },
-    { id: 'transform.cw', label: 'Otočit o 90° ↻', run: () => editor.transformQuick('cw'), isEnabled: hasLayer },
-    { id: 'transform.ccw', label: 'Otočit o 90° ↺', run: () => editor.transformQuick('ccw'), isEnabled: hasLayer },
-    { id: 'transform.180', label: 'Otočit o 180°', run: () => editor.transformQuick('180'), isEnabled: hasLayer },
-    { id: 'transform.flipH', label: 'Převrátit vodorovně', run: () => editor.transformQuick('flipH'), isEnabled: hasLayer },
-    { id: 'transform.flipV', label: 'Převrátit svisle', run: () => editor.transformQuick('flipV'), isEnabled: hasLayer },
+    { id: 'transform.cw', label: 'Otočit o 90° ↻', run: () => editor.transformQuick('cw'), isEnabled: hasPixelLayer },
+    { id: 'transform.ccw', label: 'Otočit o 90° ↺', run: () => editor.transformQuick('ccw'), isEnabled: hasPixelLayer },
+    { id: 'transform.180', label: 'Otočit o 180°', run: () => editor.transformQuick('180'), isEnabled: hasPixelLayer },
+    { id: 'transform.flipH', label: 'Převrátit vodorovně', run: () => editor.transformQuick('flipH'), isEnabled: hasPixelLayer },
+    { id: 'transform.flipV', label: 'Převrátit svisle', run: () => editor.transformQuick('flipV'), isEnabled: hasPixelLayer },
 
     // ---- Výběr ----
     { id: 'select.all', label: 'Vše', shortcuts: ['Ctrl+A'], run: () => editor.selectAll() },
+    { id: 'select.allLayers', label: 'Všechny vrstvy', shortcuts: ['Ctrl+Alt+A'], run: () => editor.selectAllLayers() },
     { id: 'select.deselect', label: 'Odznačit', shortcuts: ['Ctrl+D'], run: () => editor.deselect(), isEnabled: hasSelection },
     { id: 'select.reselect', label: 'Znovu vybrat', shortcuts: ['Ctrl+Shift+D'], run: () => editor.reselect() },
     { id: 'select.inverse', label: 'Inverze', shortcuts: ['Ctrl+Shift+I'], run: () => editor.invertSelection() },
@@ -355,7 +433,7 @@ export function registerActions(editor: Editor, app: AppContext): void {
       label: 'Vrstva vyjmutím',
       shortcuts: ['Ctrl+Shift+J'],
       run: () => editor.layerViaCut(),
-      isEnabled: () => hasLayer() && hasSelection(),
+      isEnabled: () => hasPixelLayer() && hasSelection(),
     },
     {
       id: 'layer.selectPixels',
@@ -380,7 +458,7 @@ export function registerActions(editor: Editor, app: AppContext): void {
         id,
         label,
         run: () => editor.addMask(kind),
-        isEnabled: () => hasLayer() && !hasMask() && (!needsSelection || hasSelection()),
+        isEnabled: () => hasPixelLayer() && !hasMask() && (!needsSelection || hasSelection()),
       }),
     ),
     { id: 'mask.delete', label: 'Smazat masku', run: () => editor.deleteMask(), isEnabled: hasMask },
@@ -405,35 +483,109 @@ export function registerActions(editor: Editor, app: AppContext): void {
       id: 'layer.delete',
       label: 'Smazat vrstvu',
       run: () => editor.deleteActiveLayer(),
-      isEnabled: () => hasLayer() && editor.doc.layers.length > 1,
+      isEnabled: () => editor.canDeleteSelection(),
     },
     {
       id: 'layer.front',
       label: 'Zcela dopředu',
       shortcuts: ['Ctrl+Shift+]'],
-      run: () => editor.moveActiveLayer(editor.doc.layers.length),
-      isEnabled: () => hasLayer() && activeIndex() < editor.doc.layers.length - 1,
+      run: () => void editor.shiftActiveLayer(1, true),
+      isEnabled: () => editor.canShiftActive(1),
     },
     {
       id: 'layer.up',
       label: 'Posunout dopředu',
       shortcuts: ['Ctrl+]'],
-      run: () => editor.moveActiveLayer(1),
-      isEnabled: () => hasLayer() && activeIndex() < editor.doc.layers.length - 1,
+      run: () => void editor.shiftActiveLayer(1),
+      isEnabled: () => editor.canShiftActive(1),
     },
     {
       id: 'layer.down',
       label: 'Posunout dozadu',
       shortcuts: ['Ctrl+['],
-      run: () => editor.moveActiveLayer(-1),
-      isEnabled: () => hasLayer() && activeIndex() > 0,
+      run: () => void editor.shiftActiveLayer(-1),
+      isEnabled: () => editor.canShiftActive(-1),
     },
     {
       id: 'layer.back',
       label: 'Zcela dozadu',
       shortcuts: ['Ctrl+Shift+['],
-      run: () => editor.moveActiveLayer(-editor.doc.layers.length),
-      isEnabled: () => hasLayer() && activeIndex() > 0,
+      run: () => void editor.shiftActiveLayer(-1, true),
+      isEnabled: () => editor.canShiftActive(-1),
+    },
+
+    {
+      id: 'layer.clippingMask',
+      label: 'Ořezová maska',
+      shortcuts: ['Ctrl+Alt+G'],
+      run: () => editor.toggleClippingMask(),
+      isEnabled: () => editor.canToggleClipping(),
+      isChecked: () => !!editor.doc.activeLayer?.clipped,
+    },
+
+    // ---- Zarovnání ----
+    ...(
+      [
+        ['layer.alignLeft', 'Levé okraje', 'left'],
+        ['layer.alignHCenter', 'Středy vodorovně', 'hcenter'],
+        ['layer.alignRight', 'Pravé okraje', 'right'],
+        ['layer.alignTop', 'Horní okraje', 'top'],
+        ['layer.alignVCenter', 'Středy svisle', 'vcenter'],
+        ['layer.alignBottom', 'Dolní okraje', 'bottom'],
+      ] as const
+    ).map(([id, label, kind]): Action => ({ id, label, run: () => editor.alignLayers(kind), isEnabled: hasLayer })),
+    {
+      id: 'layer.distributeH',
+      label: 'Vodorovně (stejné mezery)',
+      run: () => editor.distributeLayers('h'),
+      isEnabled: () => editor.selectedRoots().length >= 3,
+    },
+    {
+      id: 'layer.distributeV',
+      label: 'Svisle (stejné mezery)',
+      run: () => editor.distributeLayers('v'),
+      isEnabled: () => editor.selectedRoots().length >= 3,
+    },
+    {
+      id: 'layer.toggleVisible',
+      label: 'Skrýt / zobrazit vrstvy',
+      shortcuts: ['Ctrl+,'],
+      run: () => {
+        const active = editor.doc.activeLayer;
+        if (active) editor.setSelectionProps({ visible: !active.visible }, active.visible ? 'Skrýt vrstvy' : 'Zobrazit vrstvy');
+      },
+      isEnabled: hasLayer,
+    },
+
+    // ---- Skupiny ----
+    { id: 'layer.newGroup', label: 'Skupina', run: () => editor.newGroup() },
+    { id: 'layer.group', label: 'Seskupit vrstvy', shortcuts: ['Ctrl+G'], run: () => editor.groupActiveLayer(), isEnabled: hasLayer },
+    {
+      id: 'layer.ungroup',
+      label: 'Zrušit seskupení',
+      shortcuts: ['Ctrl+Shift+G'],
+      run: () => editor.ungroupActive(),
+      isEnabled: () => !!editor.doc.activeLayer && (editor.doc.activeLayer.isGroup || !!editor.doc.activeLayer.parentId),
+    },
+
+    // ---- Text ----
+    {
+      id: 'layer.rasterize',
+      label: 'Rastrovat',
+      run: () => {
+        const layer = editor.doc.activeLayer;
+        if (layer) editor.rasterizeLayer(layer, 'Rastrovat vrstvu');
+      },
+      isEnabled: () => !!editor.doc.activeLayer?.text,
+    },
+    {
+      id: 'text.edit',
+      label: 'Upravit text',
+      run: () => {
+        const layer = editor.doc.activeLayer;
+        if (layer?.text) (editor.tools.get('text') as TextTool | undefined)?.editLayer(layer.id);
+      },
+      isEnabled: () => !!editor.doc.activeLayer?.text,
     },
 
     // ---- Slučování ----
@@ -441,8 +593,9 @@ export function registerActions(editor: Editor, app: AppContext): void {
       id: 'layer.mergeDown',
       label: 'Sloučit dolů',
       shortcuts: ['Ctrl+E'],
-      run: () => void editor.mergeDown(),
-      isEnabled: () => mergeDownTarget(editor.doc) !== null,
+      // Při výběru více vrstev sloučí všechny vybrané (Sloučit vrstvy).
+      run: () => void (editor.multiSelection ? editor.mergeSelected() : editor.mergeDown()),
+      isEnabled: () => editor.multiSelection || mergeDownTarget(editor.doc) !== null,
     },
     {
       id: 'layer.mergeVisible',

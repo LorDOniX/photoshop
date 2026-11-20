@@ -1,6 +1,7 @@
 import { PaintBucket } from 'lucide';
 import { createCanvas, get2d } from '../core/canvas';
-import type { Editor } from '../core/Editor';
+import type { Editor, PaintTarget } from '../core/Editor';
+import type { SelectionMask } from '../core/selection/SelectionMask';
 import type { BlendMode } from '../core/Layer';
 import { luminance, paintMaskValue } from '../core/mask';
 import { multiplyMasks, softenEdge } from '../core/paint/fill';
@@ -21,6 +22,31 @@ export interface FillOptions {
   antiAlias: boolean;
   contiguous: boolean;
   sampleAll: boolean;
+}
+
+/**
+ * Oblast podobné barvy kolem bodu (x, y) dokumentu pro plechovku a kouzelnou gumu: flood fill
+ * nad pixely vrstvy / složeného obrazu (v masce nad hodnotami masky), volitelně s vyhlazeným lemem, omezená výběrem.
+ */
+export function floodRegion(
+  editor: Editor,
+  target: PaintTarget,
+  x: number,
+  y: number,
+  o: { tolerance: number; antiAlias: boolean; contiguous: boolean; sampleAll: boolean },
+): SelectionMask {
+  const { doc } = editor;
+  const { layer } = target;
+  let pixels: Uint8ClampedArray;
+  if (target.kind === 'mask') {
+    const c = createCanvas(doc.width, doc.height);
+    const cctx = get2d(c);
+    cctx.drawImage(target.canvas, layer.x, layer.y);
+    pixels = cctx.getImageData(0, 0, doc.width, doc.height).data;
+  } else pixels = samplePixels(doc, o.sampleAll ? 'all' : 'layer').data;
+  let region = floodSelect(pixels, doc.width, doc.height, x, y, o.tolerance, o.contiguous);
+  if (o.antiAlias) region = softenEdge(region);
+  return multiplyMasks(region, doc.selection);
 }
 
 /**
@@ -73,19 +99,7 @@ export class FillTool implements Tool {
     if (!target || !target.layer.visible || x < 0 || y < 0 || x >= doc.width || y >= doc.height) return false;
     const { layer } = target;
     const isMask = target.kind === 'mask';
-
-    // V masce se oblast hledá podle hodnot masky, jinak podle pixelů vrstvy / složeného obrazu.
-    let pixels: Uint8ClampedArray;
-    if (isMask) {
-      const c = createCanvas(doc.width, doc.height);
-      const cctx = get2d(c);
-      cctx.drawImage(target.canvas, layer.x, layer.y);
-      pixels = cctx.getImageData(0, 0, doc.width, doc.height).data;
-    } else pixels = samplePixels(doc, o.sampleAll ? 'all' : 'layer').data;
-
-    let region = floodSelect(pixels, doc.width, doc.height, x, y, o.tolerance, o.contiguous);
-    if (o.antiAlias) region = softenEdge(region);
-    region = multiplyMasks(region, doc.selection);
+    const region = floodRegion(editor, target, x, y, o);
     const b = region.bounds();
     if (!b) return false;
 

@@ -10,23 +10,44 @@ import {
   type PaintTargetKind,
 } from './commands/layerCommands';
 import { SetSelectionCommand } from './commands/selectionCommands';
-import { DocStateCommand } from './commands/stateCommands';
-import { clipRect, createCanvas, get2d, type Rect } from './canvas';
+import { DocStateCommand, LayerStateCommand } from './commands/stateCommands';
+import { clipRect, cloneCanvas, createCanvas, get2d, unionRect, type Rect } from './canvas';
 import { Emitter } from './Emitter';
 import { History, type Command } from './History';
-import { createBlankDocument, type DocChange, type DocState, type ImageDocument } from './ImageDocument';
+import { captureLayer, createBlankDocument, type DocChange, type DocState, type ImageDocument, type LayerState } from './ImageDocument';
+import { anchoredPosition, refitMask, renderText, type TextData } from './text';
 import { cropDocument, flipDocument, resizeCanvas, resizeImage, revealAllBounds, rotateDocument, trimBounds } from './imageOps';
 import type { Transform } from './transform/geometry';
 import { TransformSession } from './transform/session';
-import { Layer, type LayerProps } from './Layer';
+import { Layer, type LayerProps, type LockKind } from './Layer';
+import { restoreAlpha } from './paint/alpha';
+import { strokeMask, type StrokePosition } from './paint/stroke';
+import { alignOffsets, alphaBounds, distributeOffsets, type AlignKind, type DistributeAxis, type Offset } from './align';
 import { flatten, mergeDown, mergeVisible, type LayerList } from './merge';
+import {
+  buildTree,
+  findNode,
+  insertGroup,
+  moveNode,
+  removeNode,
+  replaceNode,
+  shiftNode,
+  subtreeItems,
+  ungroup,
+  wrapInGroup,
+  collapseNodes,
+  selectionRoots,
+  type DropPosition,
+  type FlatList,
+  type TreeNode,
+} from './groups';
 import { createMask, luminance, maskFromAlpha, maskFromSelection, paintMaskValue } from './mask';
 import { extractPixels, layerAlphaMask, maskToCanvas, rasterizeMask, samplePixels } from './selection/raster';
 import { growSelection } from './selection/floodFill';
 import { SelectionMask, type SelectionMode } from './selection/SelectionMask';
 import { Viewport } from './Viewport';
 import { ActionRegistry } from './actions';
-import { flattenDocument } from '../render/composite';
+import { compositeLayers, flattenDocument } from '../render/composite';
 import { ToolRegistry, type Tool } from '../tools/Tool';
 
 export interface EditorSettings {
@@ -40,8 +61,10 @@ export interface EditorSettings {
 }
 
 interface EditorEvents {
-  /** Dokument byl nahrazen jiným (nový / otevřený). */
+  /** Aktivní dokument se změnil (nový / otevřený / přepnutí záložky). */
   document: ImageDocument;
+  /** Změnil se seznam otevřených dokumentů (záložky) nebo stav jejich uložení. */
+  documents: void;
   docChange: DocChange;
   history: void;
   tool: Tool;
@@ -61,11 +84,35 @@ export interface PaintTarget {
   kind: PaintTargetKind;
 }
 
-/** Centrální stav aplikace – dokument, historie, pohled, nástroje a akce. */
+/** Otevřený dokument (záložka) – vlastní historie, pohled a stav uložení. */
+export interface DocSession {
+  readonly id: string;
+  readonly doc: ImageDocument;
+  readonly history: History;
+  fileName: string;
+  /** Uložený pohled pro návrat na záložku (null = při prvním zobrazení přizpůsobit oknu). */
+  view: { zoom: number; panX: number; panY: number } | null;
+  /** Poslední zrušený výběr pro „Znovu vybrat“. */
+  lastSelection: SelectionMask | null;
+  layerCounter: number;
+  /** Poslední krok historie v okamžiku uložení (null = výchozí stav). */
+  savedAt: Command | null;
+}
+
+let sessionCounter = 0;
+
+/** Výchozí limit paměti historie na záložku: 1 GB. */
+export const DEFAULT_HISTORY_MEMORY = 1024 * 1024 * 1024;
+
+/** Značka „obnoveno z automatického uložení“ – neodpovídá žádnému kroku historie, takže dokument je neuložený. */
+const RESTORED: Command = { label: 'Obnoveno', do: () => {}, undo: () => {} };
+
+/** Centrální stav aplikace – otevřené dokumenty, historie, pohled, nástroje a akce. */
 export class Editor extends Emitter<EditorEvents> {
-  doc: ImageDocument;
-  fileName = 'bez-nazvu';
-  readonly history = new History();
+  /** Otevřené dokumenty v pořadí záložek. */
+  readonly sessions: DocSession[] = [];
+  /** Aktivní dokument. */
+  session!: DocSession;
   readonly viewport = new Viewport();
   readonly tools = new ToolRegistry();
   readonly actions = new ActionRegistry();
@@ -76,19 +123,140 @@ export class Editor extends Emitter<EditorEvents> {
   selectionOptions: SelectionOptions = { ...DEFAULT_SELECTION_OPTIONS };
   /** Schránka aplikace (Ctrl+C / Ctrl+V) – pixely i s pozicí v dokumentu. */
   clipboard: { canvas: HTMLCanvasElement; x: number; y: number } | null = null;
-  /** Poslední zrušený výběr pro „Znovu vybrat“. */
-  private lastSelection: SelectionMask | null = null;
   /** Úpravy jdou do masky aktivní vrstvy (klik na náhled masky). */
   maskTarget = false;
 
   private unsubscribeDoc: (() => void) | null = null;
-  private layerCounter = 1;
+  private untitledCounter = 0;
+  /** Limit paměti historie každé záložky (bajty); nejstarší kroky nad limit se zahodí. */
+  historyMemoryLimit = DEFAULT_HISTORY_MEMORY;
 
   constructor() {
     super();
-    this.doc = createBlankDocument(1200, 800, '#ffffff');
+    this.openDocument(createBlankDocument(1200, 800, '#ffffff'));
+  }
+
+  get doc(): ImageDocument {
+    return this.session.doc;
+  }
+
+  get history(): History {
+    return this.session.history;
+  }
+
+  get fileName(): string {
+    return this.session.fileName;
+  }
+
+  set fileName(name: string) {
+    this.session.fileName = name;
+    this.emit('documents');
+  }
+
+  private get lastSelection(): SelectionMask | null {
+    return this.session.lastSelection;
+  }
+
+  private set lastSelection(mask: SelectionMask | null) {
+    this.session.lastSelection = mask;
+  }
+
+  /** Název pro nový dokument bez souboru. */
+  nextUntitledName(): string {
+    this.untitledCounter += 1;
+    return this.untitledCounter === 1 ? 'bez-nazvu' : `bez-nazvu-${this.untitledCounter}`;
+  }
+
+  /** Otevře dokument v nové záložce a přepne na ni. */
+  openDocument(doc: ImageDocument, fileName = this.nextUntitledName()): DocSession {
+    const session: DocSession = {
+      id: `doc${++sessionCounter}`,
+      doc,
+      history: new History(Number.POSITIVE_INFINITY, this.historyMemoryLimit),
+      fileName,
+      view: null,
+      lastSelection: null,
+      layerCounter: doc.layers.length,
+      savedAt: null,
+    };
+    session.history.on('change', () => {
+      if (session === this.session) this.emit('history');
+      this.emit('documents');
+    });
+    this.sessions.push(session);
+    this.activateDocument(session.id);
+    return session;
+  }
+
+  /** Přepne na jinou záložku. Rozpracovaná operace nástroje (transformace…) se nejdřív dokončí. */
+  activateDocument(id: string): void {
+    const next = this.sessions.find((s) => s.id === id);
+    if (!next || next === this.session) return;
+    const prev = this.session as DocSession | undefined;
+    if (prev) {
+      this.activeTool?.deactivate?.();
+      prev.view = { zoom: this.viewport.zoom, panX: this.viewport.panX, panY: this.viewport.panY };
+    }
+    this.session = next;
+    this.maskTarget = false;
+    if (next.view) Object.assign(this.viewport, next.view);
+    else if (this.viewport.width > 0) this.viewport.fit(next.doc.width, next.doc.height, false);
     this.bindDocument();
-    this.history.on('change', () => this.emit('history'));
+    if (prev) this.activeTool?.activate?.();
+    this.emit('document', next.doc);
+    this.emit('history');
+    this.emit('documents');
+    this.emit('view');
+  }
+
+  /** Nastaví limit paměti historie všem záložkám (přebytečné nejstarší kroky se hned zahodí). */
+  setHistoryMemoryLimit(bytes: number): void {
+    this.historyMemoryLimit = bytes;
+    for (const s of this.sessions) {
+      s.history.memoryLimit = bytes;
+      s.history.trim();
+    }
+  }
+
+  /** Vymaže historii aktivní záložky (uvolní paměť). Neuložené změny zůstanou označené. */
+  clearHistory(): void {
+    const dirty = this.isDirty();
+    this.history.clear();
+    this.history.dropped = 0;
+    if (dirty) this.session.savedAt = RESTORED;
+    this.emit('documents');
+  }
+
+  /** Neuložené změny od posledního uložení (nebo otevření). */
+  isDirty(session: DocSession = this.session): boolean {
+    const h = session.history;
+    return (h.entries[h.position - 1] ?? null) !== session.savedAt;
+  }
+
+  /** Dokument obnovený z automatického uložení – má neuložené změny, dokud se neuloží do souboru. */
+  markRestored(session: DocSession): void {
+    session.savedAt = RESTORED;
+    this.emit('documents');
+  }
+
+  markSaved(session: DocSession = this.session): void {
+    const h = session.history;
+    session.savedAt = h.entries[h.position - 1] ?? null;
+    this.emit('documents');
+  }
+
+  /** Zavře záložku. Poslední zavřená záložka se nahradí prázdným dokumentem. */
+  closeDocument(id: string): void {
+    const index = this.sessions.findIndex((s) => s.id === id);
+    if (index < 0) return;
+    const [closing] = this.sessions.splice(index, 1);
+    if (closing === this.session) {
+      const neighbour = this.sessions[Math.min(index, this.sessions.length - 1)];
+      if (neighbour) this.activateDocument(neighbour.id);
+      else this.openDocument(createBlankDocument(1200, 800, '#ffffff'));
+    }
+    closing.history.clear();
+    this.emit('documents');
   }
 
   private bindDocument(): void {
@@ -100,16 +268,6 @@ export class Editor extends Emitter<EditorEvents> {
     });
   }
 
-  setDocument(doc: ImageDocument, fileName = 'bez-nazvu'): void {
-    this.doc = doc;
-    this.fileName = fileName;
-    this.layerCounter = doc.layers.length;
-    this.lastSelection = null;
-    this.maskTarget = false;
-    this.bindDocument();
-    this.history.clear();
-    this.emit('document', doc);
-  }
 
   setTool(id: string): void {
     const tool = this.tools.get(id);
@@ -138,8 +296,8 @@ export class Editor extends Emitter<EditorEvents> {
   // ---- operace s vrstvami ----
 
   nextLayerName(): string {
-    this.layerCounter += 1;
-    return `Vrstva ${this.layerCounter}`;
+    this.session.layerCounter += 1;
+    return `Vrstva ${this.session.layerCounter}`;
   }
 
   /** Index nad aktivní vrstvou (nebo navrch). */
@@ -166,13 +324,255 @@ export class Editor extends Emitter<EditorEvents> {
   duplicateActiveLayer(): void {
     const active = this.doc.activeLayer;
     if (!active) return;
-    this.execute(new AddLayerCommand(this.doc, active.duplicate(), this.insertionIndex(), 'Duplikovat vrstvu'));
+    if (!active.isGroup) {
+      this.execute(new AddLayerCommand(this.doc, active.duplicate(), this.insertionIndex(), 'Duplikovat vrstvu'));
+      return;
+    }
+    // Skupina se duplikuje i s obsahem (nová id), kopie leží nad originálem.
+    const loc = findNode(buildTree(this.doc.layers), active.id);
+    if (!loc) return;
+    const cloneNode = (node: TreeNode<Layer>, root: boolean): TreeNode<Layer> => {
+      const l = node.item;
+      const name = root ? `${l.name} kopie` : l.name;
+      const copy = l.isGroup ? new Layer(1, 1, { ...l.getProps(), name, group: true }) : l.duplicate();
+      if (!l.isGroup) copy.name = name;
+      copy.collapsed = l.collapsed;
+      return { item: copy, children: node.children.map((c) => cloneNode(c, false)) };
+    };
+    const copy = cloneNode(loc.node, true);
+    this.applyStructure(replaceNode(this.doc.layers, active.id, [loc.node, copy]), copy.item.id, 'Duplikovat skupinu');
+  }
+
+  /** Vrstvy, které nejsou skupinou (jen ty mají pixely). */
+  pixelLayers(): Layer[] {
+    return this.doc.layers.filter((l) => !l.isGroup);
+  }
+
+  /** Vybrané vrstvy bez těch, jejichž skupina je vybraná také (odspodu nahoru). */
+  selectedRoots(): Layer[] {
+    const ids = selectionRoots(this.doc.layers, this.doc.selectedLayerIds);
+    return ids.map((id) => this.doc.getLayer(id)!).filter(Boolean);
+  }
+
+  /** Je vybráno víc vrstev najednou? */
+  get multiSelection(): boolean {
+    return this.selectedRoots().length > 1;
+  }
+
+  /** Vybere v panelu všechny vrstvy (Výběr → Všechny vrstvy). */
+  selectAllLayers(): void {
+    const active = this.doc.activeLayerId ?? this.doc.layers.at(-1)?.id;
+    if (active) this.doc.setLayerSelection(this.doc.layers.map((l) => l.id), active);
+  }
+
+  /** Lze smazat vybrané vrstvy? Dokument musí mít aspoň jednu vrstvu s pixely. */
+  canDeleteSelection(): boolean {
+    const removed = new Set(this.selectedRoots().flatMap((l) => this.subtree(l)));
+    return removed.size > 0 && this.pixelLayers().some((l) => !removed.has(l));
   }
 
   deleteActiveLayer(): void {
     const active = this.doc.activeLayer;
-    if (!active || this.doc.layers.length <= 1) return;
-    this.execute(new RemoveLayerCommand(this.doc, active.id));
+    if (!active || !this.canDeleteSelection()) return;
+    const roots = this.selectedRoots();
+    if (roots.length > 1) {
+      const list = collapseNodes(this.doc.layers, roots.map((l) => l.id), null);
+      const below = this.doc.layers[this.doc.indexOf(roots[0].id) - 1];
+      this.applyStructure(list, list?.items.includes(below) ? below.id : (list?.items.at(-1)?.id ?? null), 'Smazat vrstvy');
+      return;
+    }
+    const removed = new Set(this.subtree(active).map((l) => l.id));
+    if (!active.isGroup) {
+      this.execute(new RemoveLayerCommand(this.doc, active.id));
+      return;
+    }
+    const list = removeNode(this.doc.layers, active.id);
+    const index = this.doc.indexOf(active.id) - removed.size + 1;
+    const next = list?.items[Math.min(Math.max(0, index), (list?.items.length ?? 1) - 1)];
+    this.applyStructure(list, next?.id ?? null, 'Smazat skupinu');
+  }
+
+  /** Zapíše novou strukturu vrstev (pořadí + skupiny) jako jeden krok historie. */
+  applyStructure(list: FlatList<Layer> | null, activeId: string | null, label: string): boolean {
+    if (!list) return false;
+    const same = list.items.length === this.doc.layers.length && list.items.every((l, i) => l === this.doc.layers[i] && list.parents.get(l.id) === l.parentId);
+    if (same) return false;
+    this.execute(new LayerListCommand(this.doc, list.items, activeId, label, list.parents));
+    return true;
+  }
+
+  /** Vrstva i se všemi potomky (u skupiny), odspodu nahoru. */
+  subtree(layer: Layer): Layer[] {
+    if (!layer.isGroup) return [layer];
+    const loc = findNode(buildTree(this.doc.layers), layer.id);
+    return loc ? subtreeItems(loc.node) : [layer];
+  }
+
+  /** Vrstvy, které se posouvají spolu s vrstvou (u skupiny všechny její vrstvy s pixely). */
+  movableLayers(layer: Layer): Layer[] {
+    return this.subtree(layer).filter((l) => !l.isGroup);
+  }
+
+  /** Vrstvy, které posouvá nástroj Přesun: všechny vybrané (i obsah vybraných skupin) kromě zamčených. */
+  movableSelection(): Layer[] {
+    return [...new Set(this.selectedRoots().flatMap((l) => this.movableLayers(l)))].filter((l) => !this.isLocked(l, 'lockPosition'));
+  }
+
+  // ---- vlastnosti a zarovnání více vrstev (0.8) ----
+
+  /** Nastaví vlastnosti všem vybraným vrstvám jako jeden krok historie. */
+  setSelectionProps(props: Partial<LayerProps>, label: string): void {
+    const cmds: Command[] = [];
+    for (const l of this.selectedRoots()) {
+      const before: Partial<LayerProps> = {};
+      let changed = false;
+      for (const key of Object.keys(props) as (keyof LayerProps)[]) {
+        (before as Record<string, unknown>)[key] = l[key];
+        if (l[key] !== props[key]) changed = true;
+      }
+      if (changed) cmds.push(new SetLayerPropsCommand(this.doc, l.id, before, props, label));
+    }
+    if (cmds.length) this.execute(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
+  }
+
+  /** Zapíše změnu vlastností, která už proběhla naživo u více vrstev (posuvník krytí). */
+  commitSelectionProps(before: Map<string, Partial<LayerProps>>, label: string): void {
+    const cmds: Command[] = [];
+    for (const [id, b] of before) {
+      const l = this.doc.getLayer(id);
+      if (!l) continue;
+      const after: Partial<LayerProps> = {};
+      let changed = false;
+      for (const key of Object.keys(b) as (keyof LayerProps)[]) {
+        (after as Record<string, unknown>)[key] = l[key];
+        if (l[key] !== b[key]) changed = true;
+      }
+      if (changed) cmds.push(new SetLayerPropsCommand(this.doc, id, b, after, label));
+    }
+    if (cmds.length) this.history.push(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
+  }
+
+  /** Obdélník neprůhledných pixelů vrstvy (u skupiny všech jejích vrstev) v souřadnicích dokumentu. */
+  contentBounds(layer: Layer): Rect | null {
+    let rect: Rect | null = null;
+    for (const l of this.movableLayers(layer)) {
+      if (!l.visible) continue;
+      const b = alphaBounds(l.ctx.getImageData(0, 0, l.width, l.height).data, l.width, l.height);
+      if (b) rect = unionRect(rect, { x: b.x + l.x, y: b.y + l.y, width: b.width, height: b.height });
+    }
+    return rect;
+  }
+
+  private moveRoots(roots: Layer[], offsets: Offset[], label: string): void {
+    const cmds: Command[] = [];
+    roots.forEach((root, i) => {
+      const { dx, dy } = offsets[i];
+      if (!dx && !dy) return;
+      for (const l of this.movableLayers(root)) {
+        if (this.isLocked(l, 'lockPosition')) continue;
+        cmds.push(new SetLayerPropsCommand(this.doc, l.id, { x: l.x, y: l.y }, { x: l.x + dx, y: l.y + dy }, label));
+      }
+    });
+    if (cmds.length) this.execute(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
+  }
+
+  /** Vybrané vrstvy s obsahem a jeho obdélníky (zamčenou pozici přeskočí). */
+  private alignItems(): { roots: Layer[]; rects: Rect[] } {
+    const roots: Layer[] = [];
+    const rects: Rect[] = [];
+    for (const l of this.selectedRoots()) {
+      const b = this.contentBounds(l);
+      if (!b || this.isLocked(l, 'lockPosition')) continue;
+      roots.push(l);
+      rects.push(b);
+    }
+    return { roots, rects };
+  }
+
+  /**
+   * Zarovnání vybraných vrstev: k výběru (je-li), jinak k sobě navzájem (více vrstev), jinak k plátnu.
+   */
+  alignLayers(kind: AlignKind): void {
+    const { roots, rects } = this.alignItems();
+    if (!roots.length) return;
+    const sel = this.doc.selection?.bounds();
+    let ref: Rect | null = sel ?? null;
+    if (!ref && rects.length > 1) for (const r of rects) ref = unionRect(ref, r);
+    ref ??= { x: 0, y: 0, width: this.doc.width, height: this.doc.height };
+    const labels: Record<AlignKind, string> = {
+      left: 'Zarovnat levé okraje',
+      hcenter: 'Zarovnat na střed vodorovně',
+      right: 'Zarovnat pravé okraje',
+      top: 'Zarovnat horní okraje',
+      vcenter: 'Zarovnat na střed svisle',
+      bottom: 'Zarovnat dolní okraje',
+    };
+    this.moveRoots(roots, alignOffsets(rects, ref, kind), labels[kind]);
+  }
+
+  /** Stejné mezery mezi vybranými vrstvami (aspoň tři). */
+  distributeLayers(axis: DistributeAxis): void {
+    const { roots, rects } = this.alignItems();
+    if (roots.length < 3) return;
+    this.moveRoots(roots, distributeOffsets(rects, axis), axis === 'h' ? 'Rozmístit vodorovně' : 'Rozmístit svisle');
+  }
+
+  /** Ořezovou masku lze vytvořit (vrstva má pod sebou sourozence) nebo uvolnit. */
+  canToggleClipping(): boolean {
+    const active = this.doc.activeLayer;
+    if (!active || active.isGroup) return false;
+    if (active.clipped) return true;
+    const below = this.doc.layers[this.doc.indexOf(active.id) - 1];
+    return !!below && below.parentId === active.parentId && !below.isGroup;
+  }
+
+  /** Ctrl+Alt+G: vybrané vrstvy ořízne do vrstvy pod nimi, nebo ořezovou masku uvolní. */
+  toggleClippingMask(): void {
+    const active = this.doc.activeLayer;
+    if (!active || !this.canToggleClipping()) return;
+    const on = !active.clipped;
+    const label = on ? 'Vytvořit ořezovou masku' : 'Uvolnit ořezovou masku';
+    const layers = this.selectedRoots().filter((l) => !l.isGroup && l.clipped !== on);
+    const cmds = layers.map((l) => new SetLayerPropsCommand(this.doc, l.id, { clipped: !on }, { clipped: on }, label));
+    if (cmds.length) this.execute(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
+  }
+
+  /** Zámek vrstvy včetně zámků skupin, do kterých patří. */
+  isLocked(layer: Layer, kind: LockKind): boolean {
+    for (let l: Layer | null = layer, guard = 0; l && guard < 100; guard++) {
+      if (l[kind]) return true;
+      l = l.parentId ? this.doc.getLayer(l.parentId) : null;
+    }
+    return false;
+  }
+
+  /** Zamkne / odemkne vybrané vrstvy (zámek „vše“ = všechny tři zámky). */
+  setLocks(patch: Partial<Pick<LayerProps, LockKind>>, label: string): void {
+    const layers = this.selectedRoots();
+    const cmds: Command[] = [];
+    for (const l of layers) {
+      const before: Partial<LayerProps> = {};
+      for (const k of Object.keys(patch) as LockKind[]) before[k] = l[k];
+      if (Object.keys(patch).some((k) => l[k as LockKind] !== patch[k as LockKind])) cmds.push(new SetLayerPropsCommand(this.doc, l.id, before, patch, label));
+    }
+    if (cmds.length) this.execute(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
+  }
+
+  /** Posune vrstvy o (dx, dy) jako jeden krok historie. */
+  offsetLayers(layers: Layer[], dx: number, dy: number, label: string): void {
+    if (!layers.length || (!dx && !dy)) return;
+    const cmds = layers.map((l) => new SetLayerPropsCommand(this.doc, l.id, { x: l.x, y: l.y }, { x: l.x + dx, y: l.y + dy }, label));
+    this.execute(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
+  }
+
+  /** Zapíše posun, který už proběhl naživo (tažení nástrojem Přesun). */
+  commitLayerMoves(items: Array<{ id: string; x: number; y: number }>, label: string): void {
+    const cmds: Command[] = [];
+    for (const it of items) {
+      const l = this.doc.getLayer(it.id);
+      if (l && (l.x !== it.x || l.y !== it.y)) cmds.push(new SetLayerPropsCommand(this.doc, l.id, { x: it.x, y: it.y }, { x: l.x, y: l.y }, label));
+    }
+    if (cmds.length) this.history.push(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
   }
 
   moveLayer(id: string, toIndex: number): void {
@@ -182,9 +582,81 @@ export class Editor extends Emitter<EditorEvents> {
     this.execute(new MoveLayerCommand(this.doc, id, to));
   }
 
-  moveActiveLayer(delta: number): void {
+  /** Přesun vrstvy / skupiny ve stromu – nad nebo pod cíl, případně do skupiny (tažení v panelu). */
+  moveLayerTo(id: string, targetId: string, position: DropPosition): boolean {
+    return this.applyStructure(moveNode(this.doc.layers, id, targetId, position), id, 'Změna pořadí vrstev');
+  }
+
+  /** Ctrl+] / Ctrl+[ (se Shift = zcela nahoru / dolů) v rámci skupiny; na okraji vrstva ze skupiny vystoupí. */
+  shiftActiveLayer(dir: 1 | -1, toEnd = false): boolean {
     const id = this.doc.activeLayerId;
-    if (id) this.moveLayer(id, this.doc.indexOf(id) + delta);
+    return !!id && this.applyStructure(shiftNode(this.doc.layers, id, dir, toEnd), id, 'Změna pořadí vrstev');
+  }
+
+  canShiftActive(dir: 1 | -1): boolean {
+    const id = this.doc.activeLayerId;
+    return !!id && shiftNode(this.doc.layers, id, dir) !== null;
+  }
+
+  // ---- skupiny vrstev (0.6) ----
+
+  private nextGroupName(): string {
+    const n = this.doc.layers.filter((l) => l.isGroup).length + 1;
+    return `Skupina ${n}`;
+  }
+
+  /** Nová prázdná skupina nad aktivní vrstvou. */
+  newGroup(): void {
+    const group = new Layer(1, 1, { name: this.nextGroupName(), group: true });
+    this.applyStructure(insertGroup(this.doc.layers, this.doc.activeLayerId, group), group.id, 'Nová skupina');
+  }
+
+  /** Ctrl+G: vybrané vrstvy (nebo aktivní vrstvu / skupinu) vloží do nové skupiny na místo nejvyšší z nich. */
+  groupActiveLayer(): void {
+    const active = this.doc.activeLayer;
+    if (!active) return;
+    const group = new Layer(1, 1, { name: this.nextGroupName(), group: true });
+    const roots = this.selectedRoots();
+    const list =
+      roots.length > 1
+        ? collapseNodes(this.doc.layers, roots.map((l) => l.id), (removed) => ({ item: group, children: removed }))
+        : wrapInGroup(this.doc.layers, active.id, group);
+    this.applyStructure(list, group.id, 'Seskupit vrstvy');
+  }
+
+  /** Sloučí vybrané vrstvy do jedné (Ctrl+E při výběru více vrstev); název dostane nejvyšší z nich. */
+  mergeSelected(): boolean {
+    const roots = this.selectedRoots();
+    if (roots.length < 2) return false;
+    const content = roots.flatMap((l) => this.subtree(l));
+    const inOrder = this.doc.layers.filter((l) => content.includes(l));
+    const leaves = inOrder.filter((l) => !l.isGroup);
+    if (!leaves.length) return false;
+    let rect: Rect | null = null;
+    for (const l of leaves) rect = unionRect(rect, { x: l.x, y: l.y, width: l.width, height: l.height });
+    const r = rect!;
+    const merged = new Layer(r.width, r.height, { name: roots[roots.length - 1].name, x: r.x, y: r.y });
+    compositeLayers(merged.ctx, inOrder, r.x, r.y);
+    const list = collapseNodes(this.doc.layers, roots.map((l) => l.id), { item: merged, children: [] });
+    return this.applyStructure(list, merged.id, 'Sloučit vrstvy');
+  }
+
+  /** Shift+Ctrl+G: zruší aktivní skupinu (nebo skupinu, ve které je aktivní vrstva). */
+  ungroupActive(): void {
+    const active = this.doc.activeLayer;
+    const groupId = active?.isGroup ? active.id : active?.parentId;
+    if (!active || !groupId) return;
+    const list = ungroup(this.doc.layers, groupId);
+    const nextActive = active.isGroup ? (this.subtree(active)[this.subtree(active).length - 2]?.id ?? null) : active.id;
+    this.applyStructure(list, nextActive, 'Zrušit seskupení');
+  }
+
+  /** Sbalí / rozbalí skupinu v panelu (bez historie). */
+  toggleCollapsed(id: string): void {
+    const layer = this.doc.getLayer(id);
+    if (!layer?.isGroup) return;
+    layer.collapsed = !layer.collapsed;
+    this.doc.notifyStructure();
   }
 
   setLayerProps(id: string, props: Partial<LayerProps>, label?: string): void {
@@ -219,13 +691,13 @@ export class Editor extends Emitter<EditorEvents> {
 
   private applyLayerList(list: LayerList | null, label: string): boolean {
     if (!list) return false;
-    this.execute(new LayerListCommand(this.doc, list.layers, list.active, label));
+    this.execute(new LayerListCommand(this.doc, list.items, list.active, label, list.parents));
     return true;
   }
 
-  /** Sloučí aktivní vrstvu s vrstvou pod ní (Ctrl+E). */
+  /** Sloučí aktivní vrstvu s vrstvou pod ní, u skupiny její obsah (Ctrl+E). */
   mergeDown(): boolean {
-    return this.applyLayerList(mergeDown(this.doc), 'Sloučit dolů');
+    return this.applyLayerList(mergeDown(this.doc), this.doc.activeLayer?.isGroup ? 'Sloučit skupinu' : 'Sloučit dolů');
   }
 
   /** Sloučí všechny viditelné vrstvy do jedné (Ctrl+Shift+E). */
@@ -236,6 +708,33 @@ export class Editor extends Emitter<EditorEvents> {
   /** Zploští obraz do jedné vrstvy Pozadí (skryté vrstvy se zahodí). */
   flattenImage(): void {
     this.applyLayerList(flatten(this.doc), 'Zploštit obraz');
+  }
+
+  // ---- textové vrstvy (0.6) ----
+
+  /** Textovou vrstvu převede na rastrovou (kopie plátna bez textových dat) jako krok historie. */
+  rasterizeLayer(layer: Layer, label = 'Rastrovat text'): boolean {
+    if (!layer.text || this.isLocked(layer, 'lockPixels')) return false;
+    const before = captureLayer(layer);
+    this.execute(new LayerStateCommand(this.doc, layer.id, before, { ...before, canvas: cloneCanvas(layer.canvas) }, label));
+    return true;
+  }
+
+  /** Stav textové vrstvy s novými daty – zarovnaný okraj zůstane na místě, maska se přizpůsobí. */
+  textLayerState(layer: Layer, data: TextData): LayerState {
+    const old = layer.text ?? data;
+    const canvas = renderText(data);
+    const pos = anchoredPosition({ x: layer.x, y: layer.y, width: layer.width, data: old }, { width: canvas.width, data });
+    const rect = { ...pos, width: canvas.width, height: canvas.height };
+    const mask = layer.mask && refitMask(layer.mask, { x: layer.x, y: layer.y, width: layer.width, height: layer.height }, rect);
+    return { canvas, mask, ...pos };
+  }
+
+  /** Změní text / písmo textové vrstvy jako krok historie. */
+  setTextData(layerId: string, data: TextData, label = 'Upravit text'): void {
+    const layer = this.doc.getLayer(layerId);
+    if (!layer?.text || this.isLocked(layer, 'lockPixels')) return;
+    this.execute(new LayerStateCommand(this.doc, layer.id, captureLayer(layer), this.textLayerState(layer, data), label));
   }
 
   // ---- výběr ----
@@ -295,7 +794,12 @@ export class Editor extends Emitter<EditorEvents> {
 
   selectLayerPixels(layerId: string): void {
     const layer = this.doc.getLayer(layerId);
-    if (layer) this.setSelection(layerAlphaMask(this.doc, layer), 'Vybrat pixely');
+    if (!layer) return;
+    // U skupiny se vyberou pixely všech jejích vrstev.
+    const mask = layer.isGroup
+      ? rasterizeMask(this.doc.width, this.doc.height, (ctx) => compositeLayers(ctx, this.subtree(layer).map(asVisible)))
+      : layerAlphaMask(this.doc, layer);
+    this.setSelection(mask, 'Vybrat pixely');
   }
 
   /** Výběr → Zvětšit (souvisle) / Podobné (v celém obraze) podle tolerance kouzelné hůlky. */
@@ -398,6 +902,10 @@ export class Editor extends Emitter<EditorEvents> {
     draw: (ctx: CanvasRenderingContext2D) => void,
     target: PaintTargetKind = 'pixels',
   ): PaintCommand | null {
+    if (target === 'pixels') {
+      if (this.isLocked(layer, 'lockPixels')) return null;
+      this.rasterizeLayer(layer);
+    }
     const canvas = target === 'mask' ? layer.mask : layer.canvas;
     const r = canvas && clipRect(rect, canvas.width, canvas.height);
     if (!canvas || !r) return null;
@@ -406,8 +914,9 @@ export class Editor extends Emitter<EditorEvents> {
     ctx.save();
     draw(ctx);
     ctx.restore();
+    if (target === 'pixels' && this.isLocked(layer, 'lockTransparency')) restoreAlpha(ctx, r.x, r.y, before);
     const after = ctx.getImageData(r.x, r.y, r.width, r.height);
-    this.doc.notifyPixels(layer.id);
+    this.doc.notifyPixels(layer.id, { x: r.x + layer.x, y: r.y + layer.y, width: r.width, height: r.height });
     return new PaintCommand(this.doc, layer.id, r.x, r.y, before, after, label, target);
   }
 
@@ -423,6 +932,8 @@ export class Editor extends Emitter<EditorEvents> {
     const sel = this.doc.selection;
     if (!t) return;
     if (t.kind === 'mask') return this.fillMask(t, luminance(this.settings.secondaryColor), 'Vymazat');
+    // Se zamčenou průhledností se maže barvou pozadí (jako ve Photoshopu).
+    if (this.isLocked(t.layer, 'lockTransparency')) return this.fillSelection(this.settings.secondaryColor, 'Vymazat');
     const { layer } = t;
     const cmd = this.paintLayer(layer, this.selectionRectIn(layer), 'Vymazat', (ctx) => {
       if (sel) {
@@ -458,6 +969,42 @@ export class Editor extends Emitter<EditorEvents> {
     if (cmd) this.history.push(cmd);
   }
 
+  /**
+   * Úpravy → Obrys: obtáhne okraj výběru (bez výběru okraj obsahu aktivní vrstvy) barvou.
+   * V masce kreslí jasem barvy. Vrací false, když není co obtáhnout.
+   */
+  strokeSelection(o: { width: number; position: StrokePosition; color: string; opacity: number }): boolean {
+    const t = this.paintTarget();
+    if (!t) return false;
+    const { layer } = t;
+    const source = this.doc.selection ?? layerAlphaMask(this.doc, layer);
+    const band = strokeMask(source, o.width, o.position);
+    const b = band.bounds();
+    if (!b) return false;
+    const shape = maskToCanvas(band);
+    const rect = { x: b.x - layer.x, y: b.y - layer.y, width: b.width, height: b.height };
+    const cmd = this.paintLayer(
+      layer,
+      rect,
+      'Obrys',
+      (ctx) => {
+        if (t.kind === 'mask') return paintMaskValue(ctx, shape, -layer.x, -layer.y, luminance(o.color), o.opacity);
+        const piece = createCanvas(b.width, b.height);
+        const pctx = get2d(piece);
+        pctx.drawImage(shape, -b.x, -b.y);
+        pctx.globalCompositeOperation = 'source-in';
+        pctx.fillStyle = o.color;
+        pctx.fillRect(0, 0, b.width, b.height);
+        ctx.globalAlpha = o.opacity;
+        ctx.drawImage(piece, rect.x, rect.y);
+      },
+      t.kind,
+    );
+    if (!cmd) return false;
+    this.history.push(cmd);
+    return true;
+  }
+
   /** Nastaví masku ve výběru (nebo celou) na hodnotu 0..1. */
   private fillMask(t: PaintTarget, value: number, label: string): void {
     const sel = this.doc.selection;
@@ -484,8 +1031,12 @@ export class Editor extends Emitter<EditorEvents> {
   /** Aktuální cíl úprav (pixely aktivní vrstvy nebo její maska). */
   paintTarget(): PaintTarget | null {
     const layer = this.doc.activeLayer;
-    if (!layer) return null;
+    // Skupina nemá vlastní pixely.
+    if (!layer || layer.isGroup) return null;
     if (this.maskTarget && layer.mask) return { layer, canvas: layer.mask, ctx: get2d(layer.mask), kind: 'mask' };
+    if (this.isLocked(layer, 'lockPixels')) return null;
+    // Kreslit lze jen do rastrové vrstvy – text se nejdřív zrastruje (samostatný krok historie).
+    this.rasterizeLayer(layer);
     return { layer, canvas: layer.canvas, ctx: layer.ctx, kind: 'pixels' };
   }
 
@@ -496,7 +1047,7 @@ export class Editor extends Emitter<EditorEvents> {
   addMask(kind: MaskKind): void {
     const layer = this.doc.activeLayer;
     const sel = this.doc.selection;
-    if (!layer || layer.mask) return;
+    if (!layer || layer.mask || layer.isGroup) return;
     const { width, height } = layer;
     const masks: Record<MaskKind, () => HTMLCanvasElement | null> = {
       revealAll: () => createMask(width, height, 1),
@@ -554,7 +1105,8 @@ export class Editor extends Emitter<EditorEvents> {
 
   /** Zkopíruje výběr aktivní vrstvy (nebo složeného obrazu) do schránky aplikace. */
   copySelection(merged = false): boolean {
-    const layer = this.doc.activeLayer;
+    const active = this.doc.activeLayer;
+    const layer = active?.isGroup ? null : active;
     const source = merged ? { canvas: flattenDocument(this.doc), x: 0, y: 0 } : layer;
     if (!source) return false;
     const piece = extractPixels(source, this.doc.selection);
@@ -578,6 +1130,7 @@ export class Editor extends Emitter<EditorEvents> {
   layerViaCopy(): void {
     const layer = this.doc.activeLayer;
     if (!layer) return;
+    if (layer.isGroup) return this.duplicateActiveLayer();
     if (!this.doc.selection) return this.duplicateActiveLayer();
     const piece = extractPixels(layer, this.doc.selection);
     if (piece) this.addCanvasLayer(piece.canvas, piece.x, piece.y, this.nextLayerName(), 'Vrstva kopírováním');
@@ -587,7 +1140,7 @@ export class Editor extends Emitter<EditorEvents> {
   layerViaCut(): void {
     const layer = this.doc.activeLayer;
     const sel = this.doc.selection;
-    if (!layer || !sel) return;
+    if (!layer || !sel || layer.isGroup) return;
     const piece = extractPixels(layer, sel);
     if (!piece) return;
     const clear = this.paintLayer(layer, this.selectionRectIn(layer), 'Vymazat', (ctx) => {
@@ -637,3 +1190,8 @@ export const DEFAULT_SELECTION_OPTIONS: SelectionOptions = {
   lassoContrast: 10,
   lassoFrequency: 57,
 };
+
+/** Stejná vrstva, ale viditelná a se 100 % krytím (výběr pixelů skupiny bez ohledu na její zobrazení). */
+function asVisible(layer: Layer): Layer {
+  return Object.assign(Object.create(Object.getPrototypeOf(layer)) as Layer, layer, { visible: true });
+}

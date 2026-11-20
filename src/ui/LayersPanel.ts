@@ -1,6 +1,7 @@
-import { Brush, Contrast, Eye, FilePlus, Folder, Grid2x2, Link2, Lock, Move, SquareDot, Trash2 } from 'lucide';
+import { Brush, ChevronDown, CornerLeftDown, ChevronRight, Contrast, Eye, FilePlus, Folder, FolderOpen, Grid2x2, Link2, Lock, Move, SquareDot, Trash2 } from 'lucide';
 import type { Editor } from '../core/Editor';
-import { BLEND_MODES, type BlendMode, type Layer } from '../core/Layer';
+import { clippingBase, depthOf, isClippingBase, type DropPosition } from '../core/groups';
+import { BLEND_MODES, LOCK_KINDS, type BlendMode, type Layer, type LayerProps, type LockKind } from '../core/Layer';
 import { drawMaskPreview } from '../core/mask';
 import { iconButton, SliderField, toggleButton } from './controls';
 import { h, rafThrottle } from './dom';
@@ -19,8 +20,30 @@ export class LayersPanel {
   private readonly thumbs = new Map<string, HTMLCanvasElement>();
   private readonly maskThumbs = new Map<string, HTMLCanvasElement>();
   private readonly dirtyThumbs = new Set<string>();
-  private opacityBefore: number | null = null;
+  /** Krytí vybraných vrstev před tažením posuvníku. */
+  private opacityBefore: Map<string, Partial<LayerProps>> | null = null;
   private dragId: string | null = null;
+  /** Id zobrazených řádků shora dolů (pro výběr rozsahu se Shift). */
+  private rowOrder: string[] = [];
+  /** Tlačítka zámků (platí pro vybrané vrstvy); „vše“ zapne všechny tři zámky. */
+  private readonly lockButtons = (
+    [
+      [Grid2x2, 'Zamknout průhledné pixely', ['lockTransparency']],
+      [Brush, 'Zamknout obrazové pixely', ['lockPixels']],
+      [Move, 'Zamknout pozici', ['lockPosition']],
+      [Lock, 'Zamknout vše', LOCK_KINDS],
+    ] as const
+  ).map(([iconNode, title, kinds]) => {
+    const button = toggleButton(iconNode, title, false, () => {
+      const layer = this.editor.doc.activeLayer;
+      if (!layer) return;
+      const on = !kinds.every((k) => layer[k]);
+      const patch: Partial<Record<LockKind, boolean>> = {};
+      for (const k of kinds) patch[k] = on;
+      this.editor.setLocks(patch, on ? title : title.replace('Zamknout', 'Odemknout'));
+    });
+    return { button, kinds };
+  });
 
   constructor(
     private readonly editor: Editor,
@@ -35,10 +58,8 @@ export class LayersPanel {
         h('option', { value: m.value }, m.label),
       ]),
     );
-    this.blend.addEventListener('change', () => {
-      const layer = editor.doc.activeLayer;
-      if (layer) editor.setLayerProps(layer.id, { blendMode: this.blend.value as BlendMode }, 'Režim prolnutí');
-    });
+    // Režim a krytí platí pro všechny vybrané vrstvy.
+    this.blend.addEventListener('change', () => editor.setSelectionProps({ blendMode: this.blend.value as BlendMode }, 'Režim prolnutí'));
 
     // Během tažení se krytí mění naživo, do historie jde jen výsledná hodnota.
     this.opacity = new SliderField({
@@ -48,16 +69,13 @@ export class LayersPanel {
       max: 100,
       unit: '%',
       onInput: (v) => {
-        const layer = editor.doc.activeLayer;
-        if (!layer) return;
-        this.opacityBefore ??= layer.opacity;
-        editor.doc.updateLayer(layer.id, { opacity: v / 100 });
+        const layers = editor.selectedRoots();
+        if (!layers.length) return;
+        this.opacityBefore ??= new Map(layers.map((l) => [l.id, { opacity: l.opacity }]));
+        for (const l of layers) editor.doc.updateLayer(l.id, { opacity: v / 100 });
       },
       onCommit: () => {
-        const layer = editor.doc.activeLayer;
-        if (layer && this.opacityBefore !== null && this.opacityBefore !== layer.opacity) {
-          editor.commitLayerProps(layer.id, { opacity: this.opacityBefore }, { opacity: layer.opacity }, 'Krytí vrstvy');
-        }
+        if (this.opacityBefore) editor.commitSelectionProps(this.opacityBefore, 'Krytí vrstvy');
         this.opacityBefore = null;
       },
     });
@@ -75,10 +93,7 @@ export class LayersPanel {
         'div',
         { class: 'layer-controls' },
         h('span', { class: 'muted' }, 'Zámek:'),
-        toggleButton(Grid2x2, todo('Zamknout průhledné pixely')),
-        toggleButton(Brush, todo('Zamknout obrazové pixely')),
-        toggleButton(Move, todo('Zamknout pozici')),
-        toggleButton(Lock, todo('Zamknout vše')),
+        ...this.lockButtons.map((b) => b.button),
         h('span', { class: 'flex-spacer' }),
         new SliderField({ label: 'Výplň:', value: 100, min: 0, max: 100, unit: '%' }).element,
       ),
@@ -92,7 +107,7 @@ export class LayersPanel {
           editor.actions.run(editor.doc.selection ? (e.altKey ? 'mask.hideSelection' : 'mask.revealSelection') : e.altKey ? 'mask.hideAll' : 'mask.revealAll'),
         ),
         iconButton(Contrast, todo('Nová vrstva úprav')),
-        iconButton(Folder, todo('Nová skupina')),
+        iconButton(Folder, 'Nová skupina', run('layer.newGroup')),
         iconButton(FilePlus, 'Nová vrstva', run('layer.new')),
         iconButton(Trash2, 'Smazat vrstvu', run('layer.delete')),
       ),
@@ -119,15 +134,33 @@ export class LayersPanel {
     this.blend.disabled = !active;
     this.opacity.setValue(Math.round((active?.opacity ?? 1) * 100));
     this.opacity.disabled = !active;
+    for (const { button, kinds } of this.lockButtons) {
+      button.classList.toggle('active', !!active && kinds.every((k) => active[k]));
+      button.disabled = !active;
+    }
 
     this.thumbs.clear();
     this.maskThumbs.clear();
-    const rows = [...doc.layers].reverse().map((layer) => this.renderRow(layer, layer.id === doc.activeLayerId));
+    // Shora dolů; vrstvy ve sbalené skupině se nezobrazují.
+    const byId = new Map(doc.layers.map((l) => [l.id, l]));
+    const hiddenByCollapse = (layer: Layer) => {
+      for (let p = layer.parentId, guard = 0; p && guard < 100; guard++) {
+        const parent = byId.get(p);
+        if (!parent) break;
+        if (parent.collapsed) return true;
+        p = parent.parentId;
+      }
+      return false;
+    };
+    const shown = [...doc.layers].reverse().filter((layer) => !hiddenByCollapse(layer));
+    this.rowOrder = shown.map((l) => l.id);
+    const rows = shown.map((layer) => this.renderRow(layer, layer.id === doc.activeLayerId, depthOf(doc.layers, layer.id)));
     this.list.replaceChildren(...rows);
   }
 
-  private renderRow(layer: Layer, active: boolean): HTMLElement {
+  private renderRow(layer: Layer, active: boolean, depth: number): HTMLElement {
     const { editor } = this;
+    if (layer.isGroup) return this.renderGroupRow(layer, active, depth);
     const targeted = active ? (editor.maskTarget ? 'mask' : 'pixels') : null;
     const thumb = h('canvas', {
       class: `thumb${targeted === 'pixels' && layer.mask ? ' targeted' : ''}`,
@@ -141,9 +174,18 @@ export class LayersPanel {
         editor.selectLayerPixels(layer.id);
         return;
       }
+      // Shift+klik nechá výběr rozsahu na řádku; prostý klik vybere vrstvu a cíl „pixely“.
+      if (e.shiftKey) return;
       editor.doc.setActive(layer.id);
       editor.setMaskTarget(false);
     });
+    if (layer.text) {
+      thumb.title = 'Textová vrstva – dvojklik = upravit text';
+      thumb.addEventListener('dblclick', (e) => {
+        e.stopPropagation();
+        editor.actions.run('text.edit');
+      });
+    }
     this.thumbs.set(layer.id, thumb);
     this.drawThumb(layer, thumb);
 
@@ -188,26 +230,140 @@ export class LayersPanel {
       layer.visible ? icon(Eye, 15) : null,
     );
 
-    const name = h('span', { class: 'layer-name', title: 'Dvojklikem přejmenujete' }, layer.name);
+    const base = isClippingBase(editor.doc.layers, layer.id);
+    const name = h('span', { class: `layer-name${base ? ' clip-base' : ''}`, title: 'Dvojklikem přejmenujete' }, layer.name);
     name.addEventListener('dblclick', () => this.startRename(layer, name));
+    // Ořezaná vrstva má místo odsazení šipku k základní vrstvě (jako ve Photoshopu).
+    const clippedTo = clippingBase(editor.doc.layers, layer.id);
+    const indent = h(
+      'span',
+      { class: `layer-indent${clippedTo ? ' clip-arrow' : ''}`, style: { width: `${depth * 16 + 16}px` }, title: clippedTo ? `Ořezáno do vrstvy „${clippedTo.name}“` : undefined },
+      clippedTo ? icon(CornerLeftDown, 14) : null,
+    );
 
     const row = h(
       'div',
       {
-        class: `layer-row${active ? ' active' : ''}${layer.visible ? '' : ' hidden'}`,
+        class: `layer-row${active ? ' active' : ''}${this.selectedClass(layer)}${layer.visible ? '' : ' hidden'}`,
         draggable: 'true',
-        onClick: () => editor.doc.setActive(layer.id),
+        onClick: (e: MouseEvent) => this.selectRow(layer.id, e),
       },
       eye,
+      indent,
       thumb,
       maskThumb,
       name,
       layer.opacity < 1 ? h('span', { class: 'badge' }, `${Math.round(layer.opacity * 100)} %`) : null,
+      this.lockBadge(layer),
     );
 
+    this.attachRowEvents(row, layer);
+    return row;
+  }
+
+  /** Řádek skupiny: šipka sbalení, ikona složky, název. */
+  private renderGroupRow(layer: Layer, active: boolean, depth: number): HTMLElement {
+    const { editor } = this;
+    const eye = h(
+      'button',
+      {
+        class: 'eye',
+        type: 'button',
+        title: layer.visible ? 'Skrýt skupinu' : 'Zobrazit skupinu',
+        onClick: (e: Event) => {
+          e.stopPropagation();
+          editor.setLayerProps(layer.id, { visible: !layer.visible }, layer.visible ? 'Skrýt skupinu' : 'Zobrazit skupinu');
+        },
+      },
+      layer.visible ? icon(Eye, 15) : null,
+    );
+    const toggle = h(
+      'button',
+      {
+        class: 'group-toggle',
+        type: 'button',
+        title: layer.collapsed ? 'Rozbalit skupinu' : 'Sbalit skupinu',
+        onClick: (e: Event) => {
+          e.stopPropagation();
+          editor.toggleCollapsed(layer.id);
+        },
+      },
+      icon(layer.collapsed ? ChevronRight : ChevronDown, 14),
+    );
+    const folder = h('span', { class: 'group-icon', title: 'Ctrl+klik = vybrat pixely skupiny' }, icon(layer.collapsed ? Folder : FolderOpen, 18));
+    folder.addEventListener('click', (e) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      e.stopPropagation();
+      editor.selectLayerPixels(layer.id);
+    });
+    const name = h('span', { class: 'layer-name', title: 'Dvojklikem přejmenujete' }, layer.name);
+    name.addEventListener('dblclick', () => this.startRename(layer, name));
+    const row = h(
+      'div',
+      {
+        class: `layer-row group-row${active ? ' active' : ''}${this.selectedClass(layer)}${layer.visible ? '' : ' hidden'}`,
+        draggable: 'true',
+        onClick: (e: MouseEvent) => this.selectRow(layer.id, e),
+      },
+      eye,
+      h('span', { class: 'layer-indent', style: { width: `${depth * 16}px` } }),
+      toggle,
+      folder,
+      name,
+      layer.opacity < 1 ? h('span', { class: 'badge' }, `${Math.round(layer.opacity * 100)} %`) : null,
+      this.lockBadge(layer),
+    );
+    this.attachRowEvents(row, layer);
+    return row;
+  }
+
+  /** Ikona zámku v řádku (plný zámek = vše, jinak částečný). */
+  private lockBadge(layer: Layer): HTMLElement | null {
+    const locked = LOCK_KINDS.filter((k) => layer[k]);
+    if (!locked.length) return null;
+    const full = locked.length === LOCK_KINDS.length;
+    return h('span', { class: `lock-badge${full ? '' : ' partial'}`, title: full ? 'Zamčeno' : 'Částečně zamčeno' }, icon(Lock, 12));
+  }
+
+  private selectedClass(layer: Layer): string {
+    const doc = this.editor.doc;
+    return layer.id !== doc.activeLayerId && doc.isSelected(layer.id) ? ' selected' : '';
+  }
+
+  /**
+   * Klik na řádek: vybere jen tuto vrstvu; Ctrl/Cmd+klik přidá / odebere vrstvu z výběru,
+   * Shift+klik vybere rozsah od aktivní vrstvy (jako ve Photoshopu).
+   */
+  private selectRow(id: string, e: MouseEvent): void {
+    const doc = this.editor.doc;
+    const active = doc.activeLayerId;
+    if ((e.ctrlKey || e.metaKey) && active) {
+      const ids = doc.selectedLayerIds;
+      if (doc.isSelected(id)) {
+        const rest = ids.filter((x) => x !== id);
+        if (!rest.length) return;
+        doc.setLayerSelection(rest, id === active ? rest[rest.length - 1] : active);
+      } else doc.setLayerSelection([...ids, id], id);
+      return;
+    }
+    if (e.shiftKey && active) {
+      const a = this.rowOrder.indexOf(active);
+      const b = this.rowOrder.indexOf(id);
+      if (a >= 0 && b >= 0) {
+        doc.setLayerSelection(this.rowOrder.slice(Math.min(a, b), Math.max(a, b) + 1), id);
+        return;
+      }
+    }
+    doc.setActive(id);
+  }
+
+  /** Kontextové menu a přetahování řádku (nad / pod vrstvu, u skupiny i dovnitř). */
+  private attachRowEvents(row: HTMLElement, layer: Layer): void {
+    const { editor } = this;
     row.addEventListener('contextmenu', (e) => {
       e.preventDefault();
-      editor.doc.setActive(layer.id);
+      // Pravé tlačítko na vybrané vrstvě výběr více vrstev zachová (menu pak platí pro všechny).
+      if (!editor.doc.isSelected(layer.id)) editor.doc.setActive(layer.id);
       if (this.menus.row.length) showContextMenu(editor.actions, this.menus.row, e.clientX, e.clientY);
     });
     row.addEventListener('dragstart', (e) => {
@@ -218,32 +374,37 @@ export class LayersPanel {
     row.addEventListener('dragend', () => {
       this.dragId = null;
       row.classList.remove('dragging');
-      this.list.querySelectorAll('.drop-above, .drop-below').forEach((el) => el.classList.remove('drop-above', 'drop-below'));
+      this.clearDropMarks();
     });
     row.addEventListener('dragover', (e) => {
       if (!this.dragId) return;
       e.preventDefault();
-      const above = this.isUpperHalf(row, e);
-      row.classList.toggle('drop-above', above);
-      row.classList.toggle('drop-below', !above);
+      const pos = this.dropPosition(row, layer, e);
+      row.classList.toggle('drop-above', pos === 'above');
+      row.classList.toggle('drop-below', pos === 'below');
+      row.classList.toggle('drop-into', pos === 'into');
     });
-    row.addEventListener('dragleave', () => row.classList.remove('drop-above', 'drop-below'));
+    row.addEventListener('dragleave', () => row.classList.remove('drop-above', 'drop-below', 'drop-into'));
     row.addEventListener('drop', (e) => {
       e.preventDefault();
       const dragId = this.dragId;
+      this.clearDropMarks();
       if (!dragId || dragId === layer.id) return;
-      const doc = editor.doc;
-      const from = doc.indexOf(dragId);
-      let target = doc.indexOf(layer.id) + (this.isUpperHalf(row, e) ? 1 : 0);
-      if (from < target) target -= 1;
-      editor.moveLayer(dragId, target);
+      editor.moveLayerTo(dragId, layer.id, this.dropPosition(row, layer, e));
     });
-    return row;
   }
 
-  private isUpperHalf(el: HTMLElement, e: DragEvent): boolean {
+  private clearDropMarks(): void {
+    this.list.querySelectorAll('.drop-above, .drop-below, .drop-into').forEach((el) => el.classList.remove('drop-above', 'drop-below', 'drop-into'));
+  }
+
+  /** Horní část řádku = nad, dolní = pod; prostředek řádku skupiny (u rozbalené i spodek) = do skupiny. */
+  private dropPosition(el: HTMLElement, layer: Layer, e: DragEvent): DropPosition {
     const r = el.getBoundingClientRect();
-    return e.clientY < r.top + r.height / 2;
+    const t = (e.clientY - r.top) / r.height;
+    if (!layer.isGroup) return t < 0.5 ? 'above' : 'below';
+    if (t < 0.3) return 'above';
+    return layer.collapsed && t > 0.7 ? 'below' : 'into';
   }
 
   private startRename(layer: Layer, nameEl: HTMLElement): void {
@@ -318,10 +479,23 @@ export class LayersPanel {
     }
   }
 
-  /** Náhled vrstvy v kontextu plátna dokumentu (vč. posunu). */
+  /** Náhled vrstvy v kontextu plátna dokumentu (vč. posunu). Textová vrstva má značku „T“ jako ve Photoshopu. */
   private drawThumb(layer: Layer, thumb: HTMLCanvasElement): void {
     const ctx = thumb.getContext('2d');
     if (!ctx) return;
+    if (layer.text) {
+      const tw = THUMB_W * THUMB_SCALE;
+      const th = THUMB_H * THUMB_SCALE;
+      ctx.clearRect(0, 0, tw, th);
+      ctx.fillStyle = '#d9d9d9';
+      ctx.fillRect(tw / 2 - th / 2, 0, th, th);
+      ctx.fillStyle = '#222';
+      ctx.font = `bold ${Math.round(th * 0.7)}px Georgia, serif`;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText('T', tw / 2, th / 2 + 1);
+      return;
+    }
     const { width, height } = this.editor.doc;
     const tw = THUMB_W * THUMB_SCALE;
     const th = THUMB_H * THUMB_SCALE;

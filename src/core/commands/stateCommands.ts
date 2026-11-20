@@ -1,4 +1,4 @@
-import type { Command } from '../History';
+import { canvasBytes, type Command } from '../History';
 import type { DocState, ImageDocument, LayerState } from '../ImageDocument';
 
 /**
@@ -13,6 +13,10 @@ export class LayerStateCommand implements Command {
     private readonly after: LayerState,
     readonly label: string,
   ) {}
+
+  get bytes(): number {
+    return stateBytes(this.before, this.after);
+  }
 
   do(): void {
     this.doc.setLayerState(this.layerId, this.after);
@@ -32,6 +36,16 @@ export class DocStateCommand implements Command {
     readonly label: string,
   ) {}
 
+  get bytes(): number {
+    let sum = 0;
+    for (const [id, b] of this.before.layers) {
+      const a = this.after.layers.get(id);
+      sum += a ? stateBytes(b, a) : canvasBytes(b.canvas) + canvasBytes(b.mask);
+    }
+    if (this.before.selection !== this.after.selection) sum += this.before.selection?.data.length ?? 0;
+    return sum;
+  }
+
   do(): void {
     this.doc.applyState(this.after);
   }
@@ -39,4 +53,9 @@ export class DocStateCommand implements Command {
   undo(): void {
     this.doc.applyState(this.before);
   }
+}
+
+/** Paměť plátna a masky, které drží jen jeden ze stavů (nová plátna po transformaci apod.). */
+function stateBytes(before: LayerState, after: LayerState): number {
+  return (before.canvas !== after.canvas ? canvasBytes(before.canvas) : 0) + (before.mask !== after.mask ? canvasBytes(before.mask) : 0);
 }

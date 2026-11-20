@@ -10,6 +10,13 @@ export interface Command {
   undo(): void;
   /** Uvolnění zdrojů, když příkaz definitivně vypadne z historie. */
   dispose?(): void;
+  /** Odhad paměti, kterou příkaz drží (pixely stavu před / po), v bajtech. */
+  readonly bytes?: number;
+}
+
+/** Paměť pixelů plátna (RGBA). */
+export function canvasBytes(c: { width: number; height: number } | null | undefined): number {
+  return c ? c.width * c.height * 4 : 0;
 }
 
 /**
@@ -19,9 +26,40 @@ export interface Command {
 export class History extends Emitter<{ change: void }> {
   private stack: Command[] = [];
   private pos = 0;
+  private readonly sizes = new WeakMap<Command, number>();
+  private total = 0;
+  /** Kolik nejstarších kroků už bylo kvůli limitům zahozeno. */
+  dropped = 0;
 
-  constructor(private readonly limit = Number.POSITIVE_INFINITY) {
+  constructor(
+    private readonly limit = Number.POSITIVE_INFINITY,
+    /** Limit paměti kroků v bajtech – nejstarší kroky nad limit se zahodí (aktuální stav zůstává). */
+    public memoryLimit = Number.POSITIVE_INFINITY,
+  ) {
     super();
+  }
+
+  /** Odhad paměti, kterou drží všechny kroky historie (bajty). */
+  get memory(): number {
+    return this.total;
+  }
+
+  private drop(command: Command | undefined): void {
+    if (!command) return;
+    this.total -= this.sizes.get(command) ?? 0;
+    command.dispose?.();
+  }
+
+  /** Zahodí nejstarší kroky nad limit počtu / paměti (poslední krok vždy zůstane). */
+  trim(): void {
+    let changed = false;
+    while (this.stack.length > 1 && (this.stack.length > this.limit || this.total > this.memoryLimit) && this.pos > 0) {
+      this.drop(this.stack.shift());
+      this.pos--;
+      this.dropped++;
+      changed = true;
+    }
+    if (changed) this.emit('change');
   }
 
   get entries(): readonly Command[] {
@@ -49,10 +87,13 @@ export class History extends Emitter<{ change: void }> {
 
   /** Zapíše příkaz, jehož efekt už byl aplikován (např. tah štětcem). */
   push(command: Command): void {
-    for (const dropped of this.stack.splice(this.pos)) dropped.dispose?.();
+    for (const dropped of this.stack.splice(this.pos)) this.drop(dropped);
     this.stack.push(command);
-    while (this.stack.length > this.limit) this.stack.shift()?.dispose?.();
+    const size = command.bytes ?? 0;
+    this.sizes.set(command, size);
+    this.total += size;
     this.pos = this.stack.length;
+    this.trim();
     this.emit('change');
   }
 
@@ -80,9 +121,10 @@ export class History extends Emitter<{ change: void }> {
   }
 
   clear(): void {
-    for (const c of this.stack) c.dispose?.();
+    for (const c of this.stack) this.drop(c);
     this.stack = [];
     this.pos = 0;
+    this.total = 0;
     this.emit('change');
   }
 }

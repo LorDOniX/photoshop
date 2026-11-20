@@ -1,17 +1,21 @@
 import './styles.css';
 import { Image as ImageIcon, Info, Paintbrush, Pilcrow, SlidersHorizontal } from 'lucide';
 import { registerActions } from './app/actions';
+import { loadPreferences } from './app/preferences';
 import { buildMenus } from './app/menus';
 import { Editor } from './core/Editor';
 import { ImageDocument } from './core/ImageDocument';
 import { Layer } from './core/Layer';
 import { baseName } from './io/files';
 import { PROJECT_EXTENSION, loadProject } from './io/project';
+import { AutoSaver, deleteAutosave, listAutosaves } from './io/autosave';
 import { BrushTool } from './tools/BrushTool';
 import { CropTool } from './tools/CropTool';
 import { EyedropperTool } from './tools/EyedropperTool';
 import { FillTool } from './tools/FillTool';
+import { MagicEraserTool } from './tools/MagicEraserTool';
 import { GradientTool } from './tools/GradientTool';
+import { TextTool } from './tools/TextTool';
 import { TransformTool } from './tools/TransformTool';
 import { MoveTool } from './tools/MoveTool';
 import { HandTool, ZoomTool } from './tools/NavigationTools';
@@ -30,9 +34,13 @@ import { MenuBar } from './ui/MenuBar';
 import { createChannelsPanel, createPathsPanel, createSwatchesPanel } from './ui/MiscPanels';
 import { OptionsBar } from './ui/OptionsBar';
 import { Toolbar } from './ui/Toolbar';
+import { confirmDialog } from './ui/dialogs';
 import { h } from './ui/dom';
 
 const editor = new Editor();
+// Uložené předvolby (limit paměti historie).
+const prefs = loadPreferences();
+if (prefs.historyMemoryLimit) editor.setHistoryMemoryLimit(prefs.historyMemoryLimit);
 // Jen ve vývojovém režimu – pro ladění v konzoli prohlížeče.
 if (import.meta.env.DEV) Object.assign(window, { editor });
 
@@ -48,9 +56,12 @@ editor.tools.register(
   new QuickSelectTool(editor),
   new BrushTool(editor, 'brush'),
   new BrushTool(editor, 'eraser'),
+  new BrushTool(editor, 'pencil'),
+  new MagicEraserTool(editor),
   new EyedropperTool(editor),
   new GradientTool(editor),
   new FillTool(editor),
+  new TextTool(editor),
   new HandTool(editor),
   new CropTool(editor),
   new TransformTool(editor),
@@ -88,7 +99,7 @@ function isProjectFile(file: File): boolean {
 
 async function openFile(file: File): Promise<void> {
   if (isProjectFile(file)) {
-    editor.setDocument(await loadProject(await file.arrayBuffer()), baseName(file.name));
+    editor.openDocument(await loadProject(await file.arrayBuffer()), baseName(file.name));
     return;
   }
   const bitmap = await createImageBitmap(file);
@@ -97,13 +108,27 @@ async function openFile(file: File): Promise<void> {
   layer.ctx.drawImage(bitmap, 0, 0);
   bitmap.close();
   doc.insertLayer(layer);
-  editor.setDocument(doc, baseName(file.name));
+  editor.openDocument(doc, baseName(file.name));
 }
 
 async function placeImage(file: Blob, name: string): Promise<void> {
   const bitmap = await createImageBitmap(file);
   editor.addImageLayer(bitmap, name);
   bitmap.close();
+}
+
+/** Zavře záložku; s neuloženými změnami se nejdřív zeptá. */
+async function closeDocument(id: string): Promise<void> {
+  const session = editor.sessions.find((s) => s.id === id);
+  if (!session) return;
+  if (editor.isDirty(session) && !(await confirmDialog('Zavřít dokument', `„${session.fileName}“ má neuložené změny. Zavřít bez uložení?`))) return;
+  editor.closeDocument(id);
+}
+
+async function openFiles(files: File[]): Promise<void> {
+  for (const file of files) {
+    if (isProjectFile(file) || file.type.startsWith('image/')) await openFile(file);
+  }
 }
 
 function fitView(allowUpscale: boolean): void {
@@ -113,6 +138,8 @@ function fitView(allowUpscale: boolean): void {
 
 // ---- rozvržení ----
 const canvasView = new CanvasView(editor);
+// Jen ve vývojovém režimu – ladění a testy (porovnání cache složení s výpočtem od nuly).
+if (import.meta.env.DEV) Object.assign(window, { canvasView });
 let dock: Dock | null = null;
 
 registerActions(editor, {
@@ -128,6 +155,7 @@ registerActions(editor, {
     },
   },
   showPanel: (id) => dock?.showPanel(id),
+  closeDocument,
 });
 const menus = buildMenus(editor.actions);
 
@@ -166,13 +194,12 @@ document.querySelector('#app')!.append(
     'div',
     { class: 'workspace' },
     new Toolbar(editor, TOOLBAR_GROUPS).element,
-    h('div', { class: 'center' }, new DocumentTabs(editor).element, canvasView.element, new StatusBar(editor).element),
+    h('div', { class: 'center' }, new DocumentTabs(editor, { close: (id) => void closeDocument(id), openFiles: (files) => void openFiles(files).catch(reportError) }).element, canvasView.element, new StatusBar(editor).element),
     dock.element,
   ),
 );
 
 editor.setTool('brush');
-editor.on('document', () => fitView(false));
 
 // ---- klávesnice ----
 window.addEventListener('keydown', (e) => {
@@ -197,6 +224,57 @@ window.addEventListener('keydown', (e) => {
     }
   }
 });
+
+function reportError(err: unknown): void {
+  alert(`Soubor nejde otevřít: ${err instanceof Error ? err.message : err}`);
+}
+
+// ---- automatické ukládání a obnova po pádu / zavření bez uložení ----
+async function offerRestore(): Promise<void> {
+  const entries = await listAutosaves();
+  if (!entries.length) return;
+  const names = entries.map((e) => `„${e.fileName}“`).join(', ');
+  const restore = await confirmDialog(
+    'Obnovit rozpracované dokumenty',
+    `Z minulé práce zůstaly neuložené změny: ${names}. Obnovit je? (Zrušit je zahodí.)`,
+  );
+  const first = editor.sessions[0];
+  const untouched = editor.sessions.length === 1 && first.history.entries.length === 0 ? first : null;
+  for (const entry of entries) {
+    if (restore) {
+      try {
+        editor.markRestored(editor.openDocument(await loadProject(await entry.blob.arrayBuffer()), entry.fileName));
+      } catch (err) {
+        console.warn('Obnova dokumentu selhala:', err);
+      }
+    }
+    await deleteAutosave(entry.id);
+  }
+  // Prázdný výchozí dokument po obnově nepotřebujeme.
+  if (untouched && editor.sessions.length > 1) editor.closeDocument(untouched.id);
+}
+
+if (typeof indexedDB !== 'undefined') {
+  const saver = new AutoSaver(editor);
+  void offerRestore()
+    .catch((err) => console.warn('Automatické ukládání není dostupné:', err))
+    .finally(() => void saver.flush());
+}
+
+// Neuložené změny v některé záložce – prohlížeč se před zavřením stránky zeptá.
+window.addEventListener('beforeunload', (e) => {
+  if (editor.sessions.some((s) => editor.isDirty(s))) e.preventDefault();
+});
+
+// Gesta mimo plátno nesmí přibližovat celou stránku (Ctrl + kolečko, sevření prstů v Safari).
+window.addEventListener(
+  'wheel',
+  (e) => {
+    if (e.ctrlKey) e.preventDefault();
+  },
+  { passive: false },
+);
+for (const type of ['gesturestart', 'gesturechange']) document.addEventListener(type, (e) => e.preventDefault());
 
 // ---- drag & drop souborů a vkládání ze schránky ----
 const area = canvasView.element;

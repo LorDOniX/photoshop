@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { averageColor, parseHex, toHex } from '../src/core/color';
+import { restoreAlphaData } from '../src/core/paint/alpha';
 import { multiplyMasks, softenEdge } from '../src/core/paint/fill';
 import { buildLut, gradientParam, presetStops, renderGradient, snapAngle } from '../src/core/paint/gradient';
 import { SelectionMask } from '../src/core/selection/SelectionMask';
@@ -113,5 +114,14 @@ describe('plechovka', () => {
     const b = new SelectionMask(2, 1, new Uint8ClampedArray([255, 128]));
     expect(Array.from(multiplyMasks(a, b).data)).toEqual([255, 128]);
     expect(multiplyMasks(a, null)).toBe(a);
+  });
+});
+
+describe('zámek průhlednosti', () => {
+  it('vrátí původní alfu, průhledné zůstane průhledné', () => {
+    const after = new Uint8ClampedArray([255, 0, 0, 255, 255, 0, 0, 255, 9, 9, 9, 10]);
+    const before = new Uint8ClampedArray([0, 0, 255, 128, 0, 0, 0, 0, 0, 0, 0, 200]);
+    restoreAlphaData(after, before);
+    expect(Array.from(after)).toEqual([255, 0, 0, 128, 0, 0, 0, 0, 9, 9, 9, 200]);
   });
 });

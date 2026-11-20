@@ -36,7 +36,8 @@ export class MoveTool implements Tool {
   readonly icon = Move;
   readonly shortcut = 'V';
   readonly cursor = 'move';
-  private drag: { layerId: string; startX: number; startY: number; origX: number; origY: number } | null = null;
+  /** Tažené vrstvy (u skupiny všechny její vrstvy) s původní polohou. */
+  private drag: { items: Array<{ id: string; x: number; y: number }>; startX: number; startY: number } | null = null;
   private floating: { session: FloatingSelection; startX: number; startY: number } | null = null;
   private frame = 0;
   private pending: { dx: number; dy: number } | null = null;
@@ -51,7 +52,8 @@ export class MoveTool implements Tool {
       this.floating = { session, startX: p.x, startY: p.y };
       return;
     }
-    this.drag = { layerId: layer.id, startX: p.x, startY: p.y, origX: layer.x, origY: layer.y };
+    const items = this.editor.movableSelection().map((l) => ({ id: l.id, x: l.x, y: l.y }));
+    if (items.length) this.drag = { items, startX: p.x, startY: p.y };
   }
 
   private offset(p: ToolPointer, sx: number, sy: number): { dx: number; dy: number } {
@@ -80,7 +82,7 @@ export class MoveTool implements Tool {
     const d = this.drag;
     if (!d) return;
     const { dx, dy } = this.offset(p, d.startX, d.startY);
-    this.editor.doc.updateLayer(d.layerId, { x: d.origX + dx, y: d.origY + dy });
+    for (const it of d.items) this.editor.doc.updateLayer(it.id, { x: it.x + dx, y: it.y + dy });
   }
 
   pointerUp(p: ToolPointer): void {
@@ -96,9 +98,7 @@ export class MoveTool implements Tool {
     }
     const d = this.drag;
     this.drag = null;
-    const layer = d && this.editor.doc.getLayer(d.layerId);
-    if (!d || !layer || (layer.x === d.origX && layer.y === d.origY)) return;
-    this.editor.commitLayerProps(d.layerId, { x: d.origX, y: d.origY }, { x: layer.x, y: layer.y }, 'Přesun vrstvy');
+    if (d) this.editor.commitLayerMoves(d.items, 'Přesun vrstvy');
   }
 
   keyDown(e: KeyboardEvent): boolean {
@@ -111,7 +111,7 @@ export class MoveTool implements Tool {
       return true;
     }
     const layer = this.editor.doc.activeLayer;
-    if (layer) this.editor.setLayerProps(layer.id, { x: layer.x + off.dx, y: layer.y + off.dy }, 'Přesun vrstvy');
+    if (layer) this.editor.offsetLayers(this.editor.movableSelection(), off.dx, off.dy, 'Přesun vrstvy');
     return true;
   }
 
@@ -122,8 +122,9 @@ export class MoveTool implements Tool {
     }
   }
 
-  /** Volby jsou zatím jen připravené (bez funkce). */
+  /** Zarovnání a rozmístění vrstev; ostatní volby jsou zatím jen připravené. */
   createOptions(): ToolOptionsUI {
+    const run = (id: string) => () => this.editor.actions.run(id);
     const element = h(
       'div',
       { class: 'tool-options' },
@@ -133,15 +134,15 @@ export class MoveTool implements Tool {
       checkbox('Vzdálenosti'),
       iconButton(Download, 'Uložit vybrané vrstvy'),
       separator(),
-      iconButton(AlignStartVertical, 'Zarovnat levé okraje'),
-      iconButton(AlignCenterVertical, 'Zarovnat na střed vodorovně'),
-      iconButton(AlignEndVertical, 'Zarovnat pravé okraje'),
-      iconButton(AlignHorizontalSpaceAround, 'Stejné mezery'),
+      iconButton(AlignStartVertical, 'Zarovnat levé okraje', run('layer.alignLeft')),
+      iconButton(AlignCenterVertical, 'Zarovnat na střed vodorovně', run('layer.alignHCenter')),
+      iconButton(AlignEndVertical, 'Zarovnat pravé okraje', run('layer.alignRight')),
+      iconButton(AlignHorizontalSpaceAround, 'Stejné vodorovné mezery (3 a více vrstev)', run('layer.distributeH')),
       separator(),
-      iconButton(AlignStartHorizontal, 'Zarovnat horní okraje'),
-      iconButton(AlignCenterHorizontal, 'Zarovnat na střed svisle'),
-      iconButton(AlignEndHorizontal, 'Zarovnat dolní okraje'),
-      iconButton(AlignVerticalSpaceAround, 'Stejné mezery'),
+      iconButton(AlignStartHorizontal, 'Zarovnat horní okraje', run('layer.alignTop')),
+      iconButton(AlignCenterHorizontal, 'Zarovnat na střed svisle', run('layer.alignVCenter')),
+      iconButton(AlignEndHorizontal, 'Zarovnat dolní okraje', run('layer.alignBottom')),
+      iconButton(AlignVerticalSpaceAround, 'Stejné svislé mezery (3 a více vrstev)', run('layer.distributeV')),
       iconButton(Ellipsis, 'Další možnosti zarovnání'),
       iconButton(LayoutGrid, 'Zarovnat do mřížky'),
     );

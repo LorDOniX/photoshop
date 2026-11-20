@@ -49,7 +49,7 @@ export class TransformSession {
       return new TransformSession(editor, 'selection', null, null, null, { canvas, x: b.x, y: b.y }, sel);
     }
     const layer = doc.activeLayer;
-    if (!layer) return null;
+    if (!layer || layer.isGroup || editor.isLocked(layer, 'lockPixels') || editor.isLocked(layer, 'lockPosition')) return null;
     const base = captureLayer(layer);
     if (sel) {
       const piece = extractPixels(layer, sel);

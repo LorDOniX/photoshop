@@ -15,7 +15,6 @@ import {
   MousePointer2,
   PenLine,
   PenTool,
-  Pencil,
   Pentagon,
   Plus,
   Pointer,
@@ -26,7 +25,6 @@ import {
   ScanEye,
   Shapes,
   Slash,
-  Sparkles,
   Spline,
   SprayCan,
   Square,
@@ -76,14 +74,6 @@ const healingOptions = () => [brushPreset(), selectField('Zdroj:', SAMPLE_SOURCE
 
 const patchOptions = () => [selectionModes(), separator(), selectField('Záplata:', ['Zdroj', 'Cíl']), checkbox('Průhledné')];
 
-const pencilOptions = () => [
-  brushPreset(),
-  selectField('Režim prolnutí:', PAINT_BLEND_MODES),
-  slider('Krytí:', 100),
-  checkbox('Automatické mazání'),
-  ...pressureToggles(),
-];
-
 const colorReplaceOptions = () => [
   brushPreset(),
   selectField('Režim:', ['Odstín', 'Sytost', 'Barva', 'Světlost']),
@@ -103,8 +93,6 @@ const cloneOptions = () => [
 ];
 
 const bgEraserOptions = () => [brushPreset(), slider('Tolerance:', 50), selectField('Omezení:', ['Souvislé', 'Nesouvislé']), checkbox('Chránit barvu popředí')];
-
-const magicEraserOptions = () => [slider('Tolerance:', 32, 255, ''), checkbox('Vyhlazování', true), checkbox('Souvislé', true), checkbox('Ze všech vrstev'), slider('Krytí:', 100)];
 
 const strengthOptions = () => [brushPreset(), slider('Síla:', 50), checkbox('Ze všech vrstev'), ...pressureToggles()];
 
@@ -184,18 +172,15 @@ export function createPlaceholderTools(): Tool[] {
     t('healing', 'Retušovací štětec', Highlighter, 'J', healingOptions),
     t('patch', 'Záplata', Shapes, 'J', patchOptions),
     t('red-eye', 'Červené oči', ScanEye, 'J', () => [slider('Velikost zornice:', 50), slider('Ztmavení:', 50)]),
-    t('pencil', 'Tužka', Pencil, 'B', pencilOptions),
     t('color-replace', 'Nahrazení barvy', Replace, 'B', colorReplaceOptions),
     t('stamp', 'Razítko', Stamp, 'S', cloneOptions),
     t('bg-eraser', 'Guma pozadí', Eraser, 'E', bgEraserOptions),
-    t('magic-eraser', 'Kouzelná guma', Sparkles, 'E', magicEraserOptions),
     t('blur', 'Rozostření', Droplet, undefined, strengthOptions),
     t('sharpen', 'Zostření', Triangle, undefined, strengthOptions),
     t('smudge', 'Rozmazání', Waves, undefined, strengthOptions),
     t('dodge', 'Zesvětlení', Sun, 'O', toningOptions),
     t('burn', 'Ztmavení', Moon, 'O', toningOptions),
     t('sponge', 'Houba', SprayCan, 'O', spongeOptions),
-    t('text', 'Vodorovný text', Type, 'T', textOptions),
     t('text-vertical', 'Svislý text', Type, 'T', textOptions),
     t('pen', 'Pero', PenTool, 'P', penOptions),
     t('pen-free', 'Volné pero', PenLine, 'P', penOptions),

@@ -1,13 +1,15 @@
-import { Brush, Eraser } from 'lucide';
+import { Brush, Eraser, Pencil } from 'lucide';
 import { PaintCommand, type PaintTargetKind } from '../core/commands/layerCommands';
 import { clipRect, cloneCanvas, createCanvas, get2d, unionRect, type Rect } from '../core/canvas';
 import type { Editor } from '../core/Editor';
 import type { BlendMode, Layer } from '../core/Layer';
 import { luminance, paintMaskValue } from '../core/mask';
+import { restoreAlpha } from '../core/paint/alpha';
 import { maskToCanvas } from '../core/selection/raster';
 import type { Tool, ToolOptionsUI, ToolPointer } from './Tool';
 import { h } from '../ui/dom';
-import { selectField, SliderField } from '../ui/controls';
+import { checkbox, selectField, SliderField } from '../ui/controls';
+import { toHex } from '../core/color';
 import type { IconNode } from '../ui/icons';
 import { eyedropperOf } from './EyedropperTool';
 import { blendModeSelect, pressureToggles } from './optionParts';
@@ -30,6 +32,8 @@ interface Stroke {
   selection: HTMLCanvasElement | null;
   /** Při kreslení do masky: cílová hodnota 0..1 (jas barvy). */
   maskValue: number;
+  /** Zamčená průhlednost – po každém úseku se vrací původní alfa. */
+  lockAlpha: boolean;
 }
 
 export class BrushTool implements Tool {
@@ -41,23 +45,33 @@ export class BrushTool implements Tool {
   private current: Stroke | null = null;
   /** Alt+klik nabírá barvu (kapátko) místo kreslení. */
   private picking = false;
-  /** Režim prolnutí tahu (jen štětec; guma vždy maže). */
+  /** Režim prolnutí tahu (štětec, tužka; guma vždy maže). */
   blendMode: BlendMode = 'source-over';
+  /** Tužka: začne-li tah na barvě popředí, kreslí barvou pozadí. */
+  autoErase = false;
 
   constructor(
     private readonly editor: Editor,
-    private readonly mode: 'brush' | 'eraser',
+    private readonly mode: 'brush' | 'eraser' | 'pencil',
   ) {
-    const eraser = mode === 'eraser';
-    this.id = eraser ? 'eraser' : 'brush';
-    this.name = eraser ? 'Guma' : 'Štětec';
-    this.icon = eraser ? Eraser : Brush;
-    this.shortcut = eraser ? 'E' : 'B';
+    const info = {
+      brush: ['brush', 'Štětec', Brush, 'B'],
+      eraser: ['eraser', 'Guma', Eraser, 'E'],
+      pencil: ['pencil', 'Tužka', Pencil, 'B'],
+    } as const;
+    [this.id, this.name, this.icon, this.shortcut] = info[mode];
+  }
+
+  /** Tužka kreslí bez vyhlazení – body se přichytí na středy pixelů. */
+  private point(p: { x: number; y: number }, layer: Layer): { x: number; y: number } {
+    const x = p.x - layer.x;
+    const y = p.y - layer.y;
+    return this.mode === 'pencil' ? { x: Math.floor(x) + 0.5, y: Math.floor(y) + 0.5 } : { x, y };
   }
 
   pointerDown(p: ToolPointer): void {
     if (p.button !== 0) return;
-    const picker = p.altKey && this.mode === 'brush' ? eyedropperOf(this.editor) : null;
+    const picker = p.altKey && this.mode !== 'eraser' ? eyedropperOf(this.editor) : null;
     if (picker) {
       this.picking = true;
       picker.begin(p, 'color');
@@ -68,14 +82,21 @@ export class BrushTool implements Tool {
     const { layer, canvas } = target;
     const { color, secondaryColor, brushSize, brushOpacity } = this.editor.settings;
     const isMask = target.kind === 'mask';
+    const lockAlpha = !isMask && this.editor.isLocked(layer, 'lockTransparency');
     const stroke = createCanvas(canvas.width, canvas.height);
     const strokeCtx = get2d(stroke);
     // V masce na barvě tahu nezáleží (hodnotu určuje jas), jen na jeho alfě.
-    strokeCtx.strokeStyle = strokeCtx.fillStyle = isMask ? '#fff' : color;
-    strokeCtx.lineWidth = brushSize;
+    // Guma se zamčenou průhledností maluje barvou pozadí (jako ve Photoshopu).
+    const local = this.point(p, layer);
+    let paint = color;
+    if (this.mode === 'pencil' && this.autoErase && !isMask) {
+      const px = target.ctx.getImageData(Math.floor(local.x), Math.floor(local.y), 1, 1).data;
+      if (px[3] > 0 && toHex({ r: px[0], g: px[1], b: px[2] }) === color.toLowerCase()) paint = secondaryColor;
+    }
+    strokeCtx.strokeStyle = strokeCtx.fillStyle = isMask ? '#fff' : lockAlpha && this.mode === 'eraser' ? secondaryColor : paint;
+    strokeCtx.lineWidth = this.mode === 'pencil' ? Math.max(1, Math.round(brushSize)) : brushSize;
     strokeCtx.lineCap = 'round';
     strokeCtx.lineJoin = 'round';
-    const local = { x: p.x - layer.x, y: p.y - layer.y };
     this.current = {
       layer,
       target: target.kind,
@@ -90,6 +111,7 @@ export class BrushTool implements Tool {
       selection: this.editor.doc.selection ? maskToCanvas(this.editor.doc.selection) : null,
       // Guma v masce kreslí barvou pozadí (jako ve Photoshopu).
       maskValue: luminance(this.mode === 'eraser' ? secondaryColor : color),
+      lockAlpha,
     };
     this.segment(local, local);
   }
@@ -98,7 +120,8 @@ export class BrushTool implements Tool {
     if (this.picking) return eyedropperOf(this.editor)?.move(p);
     const s = this.current;
     if (!s) return;
-    const local = { x: p.x - s.layer.x, y: p.y - s.layer.y };
+    const local = this.point(p, s.layer);
+    if (local.x === s.last.x && local.y === s.last.y) return;
     this.segment(s.last, local);
     s.last = local;
   }
@@ -115,7 +138,7 @@ export class BrushTool implements Tool {
     const { x, y, width, height } = s.bounds;
     const before = get2d(s.snapshot).getImageData(x, y, width, height);
     const after = s.ctx.getImageData(x, y, width, height);
-    const label = `${this.mode === 'eraser' ? 'Guma' : 'Štětec'}${s.target === 'mask' ? ' (maska)' : ''}`;
+    const label = `${this.name}${s.target === 'mask' ? ' (maska)' : ''}`;
     this.editor.history.push(new PaintCommand(this.editor.doc, s.layer.id, x, y, before, after, label, s.target));
   }
 
@@ -154,6 +177,7 @@ export class BrushTool implements Tool {
 
     // Přeskládání jen dotčené oblasti: původní stav + tah s krytím štětce.
     const { x, y, width, height } = dirty;
+    if (this.mode === 'pencil') hardenAlpha(ctx, x, y, width, height);
     if (s.selection) {
       // Ořez tahu výběrem – jen v dotčené oblasti (clip), zbytek tahu je už oříznutý.
       ctx.save();
@@ -175,11 +199,12 @@ export class BrushTool implements Tool {
       paintMaskValue(lc, s.stroke, 0, 0, s.maskValue, s.opacity);
     } else {
       lc.globalAlpha = s.opacity;
-      lc.globalCompositeOperation = this.mode === 'eraser' ? 'destination-out' : this.blendMode;
+      lc.globalCompositeOperation = this.mode === 'eraser' ? (s.lockAlpha ? 'source-over' : 'destination-out') : this.blendMode;
       lc.drawImage(s.stroke, x, y, width, height, x, y, width, height);
     }
     lc.restore();
-    this.editor.doc.notifyPixels(s.layer.id);
+    if (s.lockAlpha) restoreAlpha(lc, x, y, get2d(s.snapshot).getImageData(x, y, width, height));
+    this.editor.doc.notifyPixels(s.layer.id, { x: x + s.layer.x, y: y + s.layer.y, width, height });
   }
   drawOverlay(ctx: CanvasRenderingContext2D, editor: Editor): void {
     if (this.picking) return eyedropperOf(editor)?.drawOverlay(ctx, editor);
@@ -227,8 +252,9 @@ export class BrushTool implements Tool {
       'div',
       { class: 'tool-options' },
       size.element,
-      this.mode === 'brush' ? blendModeSelect(this.blendMode, (v) => (this.blendMode = v)) : selectField('Režim:', ['Štětec', 'Tužka']),
+      this.mode !== 'eraser' ? blendModeSelect(this.blendMode, (v) => (this.blendMode = v)) : selectField('Režim:', ['Štětec', 'Tužka']),
       opacity.element,
+      this.mode === 'pencil' ? checkbox('Automatické mazání', this.autoErase, (v) => (this.autoErase = v)) : null,
       // Připravené volby (zatím bez funkce):
       new SliderField({ label: 'Tok:', value: 100, min: 1, max: 100, unit: '%' }).element,
       new SliderField({ label: 'Vyhlazení:', value: 0, min: 0, max: 100, unit: '%' }).element,
@@ -236,4 +262,12 @@ export class BrushTool implements Tool {
     );
     return { element, dispose: unsubscribe };
   }
+}
+
+/** Tužka: tah bez vyhlazení – poloprůhledné okraje se buď plně vybarví, nebo zmizí. */
+function hardenAlpha(ctx: CanvasRenderingContext2D, x: number, y: number, width: number, height: number): void {
+  const img = ctx.getImageData(x, y, width, height);
+  const d = img.data;
+  for (let i = 3; i < d.length; i += 4) d[i] = d[i] >= 64 ? 255 : 0;
+  ctx.putImageData(img, x, y);
 }

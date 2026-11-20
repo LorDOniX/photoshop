@@ -178,4 +178,62 @@ describe('slučování vrstev', () => {
     h.redo();
     expect(order(doc)).toEqual(['a', 'm']);
   });
+
+  it('výměna struktury vrací i zařazení do skupin', () => {
+    const doc = docWithLayers('a', 'b');
+    const g = new Layer(1, 1, { id: 'g', group: true });
+    const h = new History();
+    h.execute(new LayerListCommand(doc, [doc.layers[0], doc.layers[1], g], 'g', 'Seskupit', new Map([['a', 'g'], ['b', 'g'], ['g', null]])));
+    expect(order(doc)).toEqual(['a', 'b', 'g']);
+    expect(doc.layers.map((l) => l.parentId)).toEqual(['g', 'g', null]);
+    h.undo();
+    expect(order(doc)).toEqual(['a', 'b']);
+    expect(doc.layers.map((l) => l.parentId)).toEqual([null, null]);
+    h.redo();
+    expect(doc.getLayer('a')?.parentId).toBe('g');
+  });
 });
+
+describe('paměť historie', () => {
+  const big = (log: string[], name: string, bytes: number): Command => ({ label: name, bytes, do: () => log.push(`do ${name}`), undo: () => log.push(`undo ${name}`) });
+
+  it('nad limitem se zahodí nejstarší kroky, aktuální stav zůstane', () => {
+    const log: string[] = [];
+    const h = new History(Number.POSITIVE_INFINITY, 250);
+    h.execute(big(log, 'a', 100));
+    h.execute(big(log, 'b', 100));
+    expect(h.memory).toBe(200);
+    h.execute(big(log, 'c', 100));
+    expect(h.entries.map((c) => c.label)).toEqual(['b', 'c']);
+    expect(h.memory).toBe(200);
+    expect(h.dropped).toBe(1);
+    expect(h.position).toBe(2);
+    // undo jde jen po nejstarší zachovaný krok
+    h.undo();
+    h.undo();
+    expect(h.canUndo).toBe(false);
+  });
+
+  it('jediný obří krok zůstane; zahozená budoucnost se odečte', () => {
+    const log: string[] = [];
+    const h = new History(Number.POSITIVE_INFINITY, 50);
+    h.execute(big(log, 'x', 500));
+    expect(h.entries.length).toBe(1);
+    h.undo();
+    h.execute(big(log, 'y', 10));
+    expect(h.entries.map((c) => c.label)).toEqual(['y']);
+    expect(h.memory).toBe(10);
+  });
+
+  it('snížení limitu zahodí přebytek hned', () => {
+    const log: string[] = [];
+    const h = new History();
+    for (const n of ['a', 'b', 'c', 'd']) h.execute(big(log, n, 100));
+    h.memoryLimit = 150;
+    h.trim();
+    expect(h.entries.map((c) => c.label)).toEqual(['d']);
+    h.clear();
+    expect(h.memory).toBe(0);
+  });
+});
+

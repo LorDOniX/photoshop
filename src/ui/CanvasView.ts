@@ -8,7 +8,18 @@ function isTyping(target: EventTarget | null): boolean {
   return target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement || target instanceof HTMLSelectElement;
 }
 
-/** Plátno s obsluhou ukazatele: předává události aktivnímu nástroji, kolečko = zoom, mezerník/prostřední tlačítko = posun. */
+/** Gesto sevření v Safari (nestandardní GestureEvent). */
+interface SafariGestureEvent extends UIEvent {
+  scale: number;
+  clientX: number;
+  clientY: number;
+}
+
+/**
+ * Plátno s obsluhou ukazatele: předává události aktivnímu nástroji.
+ * Touchpad / kolečko: dva prsty = posun všemi směry, sevření nebo Ctrl/Cmd/Alt + kolečko = zoom,
+ * Shift + kolečko myši = vodorovný posun. Mezerník / prostřední tlačítko + tažení = posun.
+ */
 export class CanvasView {
   readonly element: HTMLElement;
   readonly renderer: Renderer;
@@ -46,6 +57,10 @@ export class CanvasView {
     }).observe(wrap);
 
     this.canvas.addEventListener('pointerdown', (e) => this.onPointerDown(e));
+    // Výchozí akce kliknutí by vzala fokus textovému poli, které nástroj právě otevřel (Text).
+    this.canvas.addEventListener('mousedown', (e) => {
+      if (document.activeElement?.classList.contains('text-editor')) e.preventDefault();
+    });
     this.canvas.addEventListener('pointermove', (e) => this.onPointerMove(e));
     this.canvas.addEventListener('pointerup', (e) => this.onPointerUp(e));
     this.canvas.addEventListener('pointercancel', (e) => this.onPointerUp(e));
@@ -55,6 +70,19 @@ export class CanvasView {
       editor.notifyView();
     });
     this.canvas.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
+    // Safari posílá sevření prstů jako gesturestart/gesturechange místo kolečka s Ctrl.
+    let gestureZoom = 1;
+    this.canvas.addEventListener('gesturestart', (e) => {
+      e.preventDefault();
+      gestureZoom = editor.viewport.zoom;
+    });
+    this.canvas.addEventListener('gesturechange', (e) => {
+      e.preventDefault();
+      const g = e as SafariGestureEvent;
+      const rect = this.canvas.getBoundingClientRect();
+      editor.viewport.zoomAt(gestureZoom * g.scale, g.clientX - rect.left, g.clientY - rect.top);
+      editor.notifyView();
+    });
     this.canvas.addEventListener('contextmenu', (e) => e.preventDefault());
 
     window.addEventListener('keydown', (e) => {
@@ -158,12 +186,20 @@ export class CanvasView {
     const sx = e.clientX - rect.left;
     const sy = e.clientY - rect.top;
     const vp = this.editor.viewport;
-    if (e.shiftKey && !e.ctrlKey) {
-      vp.panBy(-e.deltaY, 0);
+    // Převod na pixely (řádkový / stránkový režim kolečka u některých myší).
+    const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? rect.height : 1;
+    let dx = e.deltaX * unit;
+    let dy = e.deltaY * unit;
+    if (e.ctrlKey || e.metaKey || e.altKey) {
+      // Sevření na touchpadu = kolečko s ctrlKey a malými kroky; kolečko myši dělá skoky ~100 px – omezí se.
+      const d = Math.max(-50, Math.min(50, dy || dx));
+      vp.zoomAt(vp.zoom * Math.exp(-d * 0.01), sx, sy);
     } else {
-      const factor = Math.exp(-e.deltaY * (e.deltaMode === 1 ? 0.05 : 0.0015));
-      vp.zoomAt(vp.zoom * factor, sx, sy);
+      // Shift + svislé kolečko myši = vodorovný posun (touchpad posílá deltaX sám).
+      if (e.shiftKey && dx === 0) [dx, dy] = [dy, 0];
+      vp.panBy(-dx, -dy);
     }
     this.editor.notifyView();
   }
+
 }

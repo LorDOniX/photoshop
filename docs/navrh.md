@@ -108,13 +108,78 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
 - Skládání vrstev je rozdělené na `drawLayer` / `compositeLayers` (podmnožina vrstev s posunem) – používá ho slučování
   i vzorkování „aktuální a nižší“.
 
+## Verze 0.5.1 – Více dokumentů a ovládání touchpadem (hotovo)
+
+- **Záložky dokumentů:** `Editor.sessions` (`DocSession` = dokument + vlastní `History`, název, uložený pohled, poslední výběr,
+  stav uložení). `editor.doc` / `editor.history` jsou gettery na aktivní záložku, takže zbytek aplikace se nemění.
+  Přepnutí záložky dokončí rozpracovanou operaci nástroje (`deactivate`), uloží a obnoví zoom/posun a vyšle událost `document`.
+  Neuložené změny = poslední krok historie se liší od kroku při uložení; zavření se zeptá, stejně tak zavření stránky.
+- **Touchpad / kolečko:** dva prsty posouvají pohled všemi směry, sevření (Chrome/Firefox: kolečko s `ctrlKey`,
+  Safari: `gesturechange`) a Ctrl/Cmd/Alt + kolečko přibližují k místu kurzoru. Stránka se gesty nepřibližuje ani nepřescrolluje
+  (`overscroll-behavior: none`), takže švihnutí do strany nespustí navigaci zpět.
+- **Levý panel:** neposouvá se; při nízkém okně se nástroje rozloží do 2–3 sloupců (dříve se skrytě posouval a „odskakoval“).
+
+## Verze 0.6 – Text a skupiny vrstev (hotovo)
+
+- **Textové vrstvy** (`core/text.ts`, `tools/TextTool.ts`): `TextData` (obsah, písmo, řez, velikost, barva, zarovnání, řádkování)
+  je svázaná s **konkrétním plátnem** vrstvy (WeakMap). Operace, které plátno nahradí (transformace, oříznutí, sloučení),
+  tak vrstvu automaticky zrastrují a undo vrátí původní plátno i s textem – zbytek aplikace se kvůli textu nemusel měnit.
+  Úpravy pixelů na místě (štětec, výplň, mazání) volají `Editor.rasterizeLayer` (vlastní krok historie). Velikost obrazu
+  text nerastruje – zvětší písmo a vykreslí znovu. Editor: průhledné `<textarea>` přesně nad vykresleným textem
+  (stejné CSS písmo, řádkování a okraje), text se překresluje naživo, do historie jde jen výsledek (nová vrstva = `AddLayerCommand`,
+  úprava = `LayerStateCommand`). Zarovnaný okraj a první řádek zůstávají při změnách na místě (`anchoredPosition`).
+- **Skupiny vrstev** (`core/groups.ts`): seznam vrstev zůstává plochý (odspodu nahoru), skupina je záhlaví (`Layer.isGroup`,
+  plátno 1 × 1) nad souvislým blokem potomků s `parentId`. Strukturální operace (seskupit, zrušit, přesun nad / pod / do skupiny,
+  posun mezi sourozenci, smazání, duplikát, sloučení skupiny) se počítají nad stromem čistými funkcemi a zapisují jedním
+  `LayerListCommand` (pořadí + rodiče). Skládání: skupina se 100 % a Normální je průchozí, jinak se složí do pomocného plátna
+  a vykreslí se svým krytím a režimem. Nová vrstva vložená mezi vrstvy skupiny do ní automaticky patří (`parentForInsertion`).
+- Formát projektu verze 3: textová data a skupiny (starší verze otevřou text jako obrázek).
+
+## Verze 0.7 – Více vrstev, zámky, automatické ukládání (hotovo)
+
+- **Výběr více vrstev:** `ImageDocument` drží vedle aktivní vrstvy množinu dalších vybraných (mimo historii;
+  `LayerListCommand` ji při undo vrací). Operace pracují s „kořeny výběru“ (`selectionRoots` – vrstvy, jejichž skupina není také
+  vybraná). Seskupit / sloučit / smazat více vrstev = `collapseNodes` (odebere uzly a na místo nejvyššího vloží skupinu,
+  sloučenou vrstvu nebo nic). Přesun posouvá všechny vybrané kromě zamčených.
+- **Zámky vrstev:** `lockTransparency`, `lockPixels`, `lockPosition` jsou vlastnosti vrstvy (undo, ukládání); zámek skupiny platí
+  pro obsah (`Editor.isLocked`). Zamčené pixely blokují `paintTarget` / `paintLayer`, transformaci a úpravu textu;
+  zamčená průhlednost po každé úpravě vrátí původní alfu (`core/paint/alpha.ts`) – štětec po každém úseku, výplně a přechod v `paintLayer`.
+- **Automatické ukládání** (`io/autosave.ts`): neuložené záložky se po 2,5 s nečinnosti a při skrytí stránky ukládají jako `.ptsp`
+  do IndexedDB; po startu se nabídne obnova (obnovený dokument je „neuložený“, dokud se neuloží do souboru).
+- **Export WEBP** (s průhledností); prohlížeč bez kodéru WEBP ohlásí, že ho neumí.
+
+## Verze 0.8 – Ořezové masky, zarovnání, další nástroje (hotovo)
+
+- **Ořezové masky:** vlastnost vrstvy `clipped`. Při skládání se základ (nejbližší neořezaný sourozenec pod ní, ne skupina)
+  a ořezané vrstvy nad ním složí do pomocného plátna – normální režim přes `source-atop` (přesně), jiné režimy přes
+  oříznutí alfou základu – a výsledek se vykreslí s krytím a režimem základu (`drawClipGroup` v `render/composite.ts`).
+  Sloučit dolů do základu ořezanou vrstvu do něj ořízne.
+- **Zarovnání / rozmístění** (`core/align.ts`, čisté funkce): obdélníky obsahu vrstev (neprůhledné pixely), reference = výběr,
+  sjednocení vybraných vrstev nebo plátno. Krytí, režim a viditelnost se mění u všech vybraných vrstev.
+- **Tužka** (BrushTool v režimu `pencil`: body na středech pixelů, alfa tahu prahovaná na 0 / 255), **Kouzelná guma**
+  (sdílí hledání oblasti s plechovkou – `floodRegion`), **Úpravy → Obrys…** (`core/paint/stroke.ts`: pás kolem výběru
+  z přesné euklidovské vzdálenostní transformace – kulaté rohy, vyhlazený okraj).
+
+## Verze 0.9 – Výkon a paměť (hotovo)
+
+- **CompositeCache** (`render/CompositeCache.ts`): kořenové uzly stromu vrstev se dělí na *pod* (předskládáno), *střed*
+  (uzel s aktivní vrstvou, u ořezové masky celá ořezová skupina) a *nad* (předskládáno – jen když se celý skládá režimem
+  Normální, protože operace „přes“ je asociativní; jinak se nedělí). Změna pixelů / vlastností vrstvy ve středu přeskládá jen
+  střed, změna pixelů jen ve změněném výřezu (`DocChange.pixels.rect`; výřez omezuje i pomocná plátna skupin a ořezových masek).
+  Jakákoli jiná změna (struktura, aktivní vrstva, jiná vrstva) = úplné přeskládání.
+- **Zmenšený obraz pro okno** při zoomu < 1 se cachuje a při změně se aktualizuje jen výřez → posun pohledu nic nepřepočítává.
+  Stín plátna se vykresluje jednou do obrázku.
+- Měření (Chromium bez GPU, 4000 × 3000, 10 vrstev, čistý čas práce na snímek): tah štětcem 194 → 24 ms, přesun vrstvy
+  172 → 59 ms, krytí posuvníkem 221 → 61 ms, posun pohledu 33 → 0,5 ms. Správnost hlídá test, který po náhodných úpravách
+  porovnává cache se složením počítaným od nuly (shoda pixelů ± 2 úrovně z 255).
+- **Limit paměti historie:** příkazy hlásí odhad paměti (`Command.bytes` – pixely stavu, které drží jen historie);
+  `History` nad limitem zahazuje nejstarší kroky (aktuální stav i poslední krok zůstávají). Limit v Předvolbách
+  (`localStorage`), panel Historie ukazuje obsazenou paměť, *Vymazat historii* uvolní vše (dokument zůstane neuložený).
+
 ## Plán dalších verzí
 
-### 0.6 – Text a skupiny vrstev
-- Textová vrstva (nový typ vrstvy s vlastnostmi písma, rastrování při vykreslení, úprava dvojklikem), rastrovat vrstvu.
-- Skupiny vrstev (složky) – stromová struktura v `ImageDocument`, sbalení v panelu, `Ctrl+G`; uložení do `.ptsp` (verze formátu 3).
-
 ### Další
-- Tužka, kouzelná guma, guma pozadí; Úpravy → Obrys…; ořezová maska.
-- Výkon: dirty-rect kompozice, cache „vrstvy pod / nad aktivní“, případně WebGL renderer; omezení paměti historie (volitelný limit / ukládání starých kroků do IndexedDB).
-- Automatické ukládání do IndexedDB, otevírání PSD (knihovna `ag-psd`).
+- Otevírání a ukládání PSD (knihovna `ag-psd` – nainstalovat `npm i ag-psd`).
+- Svislý text, styly odstavce; masky skupin a ořezová maska nad skupinou.
+- Guma pozadí, razítko; Alt+klik mezi vrstvami v panelu = ořezová maska.
+- Výkon dál: rozdělení i pro vrstvy uvnitř skupin, změna krytí bez přepočtu zmenšeniny celého obrazu, případně WebGL.

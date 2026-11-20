@@ -24,6 +24,8 @@ body,
   margin: 0;
   height: 100%;
   overflow: hidden;
+  /* Bez pružného přescrollování a navigace zpět/vpřed švihnutím dvou prstů (macOS). */
+  overscroll-behavior: none;
   background: var(--bg);
   color: var(--text);
 }
@@ -341,21 +343,34 @@ button {
 /* ---- pracovní plocha ---- */
 .workspace {
   display: grid;
-  grid-template-columns: 34px 1fr auto;
+  grid-template-columns: auto 1fr auto;
   min-height: 0;
   background: var(--bg);
 }
 
 /* levý panel nástrojů */
 .toolbar {
+  --cols: 1;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 1px;
+  width: calc(var(--cols) * 30px + 4px);
   padding: 4px 0;
-  overflow-y: auto;
-  scrollbar-width: none;
+  /* Neposouvá se – při nedostatku místa přibude sloupec (Toolbar.ts). */
+  overflow: hidden;
   background: var(--panel);
+}
+.tool-grid {
+  display: grid;
+  grid-template-columns: repeat(var(--cols), 30px);
+  gap: 1px 0;
+}
+.toolbar-bottom {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
 }
 .tool-btn {
   position: relative;
@@ -477,19 +492,46 @@ button {
   align-items: flex-end;
   gap: 2px;
   padding: 0 4px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  overscroll-behavior: none;
   background: var(--bg);
+}
+.doc-tabs.drop-target {
+  outline: 2px dashed var(--accent, #4a90e2);
+  outline-offset: -2px;
 }
 .doc-tab {
   display: flex;
+  flex: 0 1 auto;
   align-items: center;
   gap: 4px;
+  min-width: 70px;
+  max-width: 220px;
   height: 22px;
   padding: 0 4px 0 8px;
+  color: #aaa;
   background: #3a3a3a;
   border-radius: 2px 2px 0 0;
+  cursor: default;
+  user-select: none;
+}
+.doc-tab:hover {
+  color: var(--text);
 }
 .doc-tab.active {
+  color: var(--text);
   background: var(--panel);
+}
+.doc-tab-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.doc-tab.dirty .doc-tab-name::after {
+  content: ' •';
 }
 .doc-tab-close {
   min-width: 18px;
@@ -674,7 +716,21 @@ button {
 }
 
 /* historie */
+.history-panel {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+.history-footer {
+  flex: none;
+  padding: 2px 8px;
+  color: #aaa;
+  font-size: 11px;
+  border-top: 1px solid #444;
+}
 .history-list {
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
   background: #4d4d4d;
 }
@@ -751,6 +807,10 @@ button {
 .layer-row.active {
   background: var(--selected);
 }
+/* další vrstvy ve výběru více vrstev */
+.layer-row.selected {
+  background: color-mix(in srgb, var(--selected) 55%, transparent);
+}
 .layer-row.hidden .thumb,
 .layer-row.hidden .layer-name {
   opacity: 0.5;
@@ -763,6 +823,33 @@ button {
 }
 .layer-row.drop-below {
   box-shadow: inset 0 -2px 0 var(--accent);
+}
+.layer-row.drop-into {
+  box-shadow: inset 0 0 0 2px var(--accent);
+}
+/* skupiny vrstev */
+.layer-indent {
+  flex: none;
+}
+.group-toggle {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 20px;
+  padding: 0;
+  color: var(--text);
+  background: none;
+  border: none;
+}
+.group-icon {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  color: #d9b45a;
 }
 .eye {
   display: flex;
@@ -913,4 +1000,60 @@ button {
 .dialog-buttons .primary {
   background: var(--accent);
   border-color: var(--accent);
+}
+
+/* ---- nástroj Text: průhledné textové pole nad vykresleným textem ---- */
+.text-editor {
+  position: fixed;
+  z-index: 20;
+  box-sizing: border-box;
+  margin: 0;
+  overflow: hidden;
+  color: transparent;
+  white-space: pre;
+  background: transparent;
+  border: none;
+  outline: none;
+  resize: none;
+}
+.text-editor::selection {
+  color: transparent;
+  background: rgba(58, 142, 230, 0.45);
+}
+.color-input {
+  width: 30px;
+  height: 20px;
+  padding: 0;
+  background: none;
+  border: 1px solid #888;
+  cursor: pointer;
+}
+
+/* zámek ve řádku vrstvy */
+.lock-badge {
+  display: flex;
+  flex: none;
+  margin-left: auto;
+  color: #ddd;
+}
+.lock-badge.partial {
+  opacity: 0.5;
+}
+/* zapnuté zámky v panelu Vrstvy musí být jasně vidět */
+.layer-controls .icon-btn.active {
+  color: #fff;
+  background: color-mix(in srgb, var(--accent) 45%, var(--bg));
+  border-color: var(--accent);
+}
+
+/* ořezová maska v panelu Vrstvy */
+.layer-indent.clip-arrow {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  color: #ccc;
+}
+.layer-name.clip-base {
+  text-decoration: underline;
+  text-underline-offset: 3px;
 }

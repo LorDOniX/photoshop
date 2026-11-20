@@ -11,6 +11,10 @@ export class SetSelectionCommand implements Command {
     readonly label: string,
   ) {}
 
+  get bytes(): number {
+    return (this.before?.data.length ?? 0) + (this.after?.data.length ?? 0);
+  }
+
   do(): void {
     this.doc.setSelection(this.after);
   }

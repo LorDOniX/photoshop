@@ -1,3 +1,4 @@
+import type { Rect } from './canvas';
 import { Emitter } from './Emitter';
 import { Layer, type LayerProps } from './Layer';
 import type { SelectionMask } from './selection/SelectionMask';
@@ -6,7 +7,8 @@ export type DocChange =
   | { kind: 'structure' }
   | { kind: 'active' }
   | { kind: 'props'; layerId: string }
-  | { kind: 'pixels'; layerId: string }
+  /** `rect` = změněná oblast v souřadnicích dokumentu (chybí = celá vrstva). */
+  | { kind: 'pixels'; layerId: string; rect?: Rect }
   | { kind: 'selection' }
   | { kind: 'size' };
 
@@ -17,6 +19,8 @@ export type DocChange =
 export class ImageDocument extends Emitter<{ change: DocChange }> {
   layers: Layer[] = [];
   activeLayerId: string | null = null;
+  /** Další vrstvy vybrané v panelu spolu s aktivní (výběr více vrstev, není v historii). */
+  private extraSelected = new Set<string>();
   /** Aktuální výběr (maska o velikosti dokumentu) nebo null = nic není vybráno. */
   selection: SelectionMask | null = null;
   /** Zvyšuje se při každé změně – slouží k invalidaci cache (vzorkování pixelů apod.). */
@@ -93,17 +97,36 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
     this.changed({ kind: 'structure' });
   }
 
-  /** Nahradí celý seznam vrstev (slučování, zploštění). */
+  /** Nahradí celý seznam vrstev (slučování, zploštění, skupiny). Rodiče vrstev nastavuje volající. */
   setLayers(layers: Layer[], activeId: string | null): void {
     this.layers = [...layers];
     this.activeLayerId = activeId && this.getLayer(activeId) ? activeId : (this.layers.at(-1)?.id ?? null);
+    this.extraSelected.clear();
     this.changed({ kind: 'structure' });
   }
 
   setActive(id: string | null): void {
     if (id !== null && !this.getLayer(id)) return;
-    if (this.activeLayerId === id) return;
+    if (this.activeLayerId === id && !this.extraSelected.size) return;
     this.activeLayerId = id;
+    this.extraSelected.clear();
+    this.changed({ kind: 'active' });
+  }
+
+  /** Vybrané vrstvy (aktivní + další vybrané) v pořadí seznamu, odspodu nahoru. */
+  get selectedLayerIds(): string[] {
+    return this.layers.filter((l) => l.id === this.activeLayerId || this.extraSelected.has(l.id)).map((l) => l.id);
+  }
+
+  isSelected(id: string): boolean {
+    return id === this.activeLayerId || this.extraSelected.has(id);
+  }
+
+  /** Výběr více vrstev v panelu: `active` je hlavní (vlastnosti, kreslení), ostatní jsou přibrané. */
+  setLayerSelection(ids: readonly string[], active: string): void {
+    if (!this.getLayer(active)) return;
+    this.activeLayerId = active;
+    this.extraSelected = new Set(ids.filter((id) => id !== active && this.getLayer(id)));
     this.changed({ kind: 'active' });
   }
 
@@ -118,9 +141,14 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
     this.changed({ kind: 'props', layerId: id });
   }
 
+  /** Oznámí změnu struktury bez změny seznamu (sbalení skupiny v panelu). */
+  notifyStructure(): void {
+    this.changed({ kind: 'structure' });
+  }
+
   /** Oznámí změnu pixelů vrstvy (překreslení, náhledy). */
-  notifyPixels(layerId: string): void {
-    this.changed({ kind: 'pixels', layerId });
+  notifyPixels(layerId: string, rect?: Rect): void {
+    this.changed({ kind: 'pixels', layerId, rect });
   }
 
   /** Nahradí plátno, masku a pozici vrstvy (transformace, přesun pixelů, změna velikosti). */

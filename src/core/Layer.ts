@@ -1,5 +1,6 @@
 import { cloneCanvas, createCanvas, get2d } from './canvas';
 import { createId } from './id';
+import { getTextData, setTextData, type TextData } from './text';
 
 export type BlendMode =
   | 'source-over'
@@ -50,15 +51,33 @@ export interface LayerProps {
   y: number;
   /** Maska se uplatňuje (Shift+klik na náhled masky ji vypne). */
   maskEnabled: boolean;
+  /** Zámky: průhledné pixely (kreslí se jen do neprůhledných), obrazové pixely, pozice. */
+  lockTransparency: boolean;
+  lockPixels: boolean;
+  lockPosition: boolean;
+  /** Ořezová maska: vrstva je vidět jen v pixelech základní vrstvy pod ní (viz core/groups.ts clippingBase). */
+  clipped: boolean;
 }
+
+export type LockKind = 'lockTransparency' | 'lockPixels' | 'lockPosition';
+export const LOCK_KINDS: readonly LockKind[] = ['lockTransparency', 'lockPixels', 'lockPosition'];
 
 export interface LayerInit extends Partial<LayerProps> {
   id?: string;
+  /** Skupina vrstev (složka) – nemá vlastní pixely. */
+  group?: boolean;
+  parentId?: string | null;
 }
 
 /** Rastrová vrstva – pixely drží vlastní canvas, vlastnosti řídí kompozici. */
 export class Layer implements LayerProps {
   readonly id: string;
+  /** Skupina (složka) – v seznamu vrstev leží nad svými potomky, pixely nemá (plátno 1 × 1). */
+  readonly isGroup: boolean;
+  /** Skupina, do které vrstva patří (null = kořen dokumentu). Viz core/groups.ts. */
+  parentId: string | null = null;
+  /** Skupina je v panelu Vrstvy sbalená (jen stav zobrazení, nejde do historie). */
+  collapsed = false;
   name = 'Vrstva';
   visible = true;
   opacity = 1;
@@ -66,6 +85,10 @@ export class Layer implements LayerProps {
   x = 0;
   y = 0;
   maskEnabled = true;
+  lockTransparency = false;
+  lockPixels = false;
+  lockPosition = false;
+  clipped = false;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   /**
@@ -75,9 +98,11 @@ export class Layer implements LayerProps {
   mask: HTMLCanvasElement | null = null;
 
   constructor(width: number, height: number, init: LayerInit = {}) {
-    const { id, ...props } = init;
+    const { id, group, parentId, ...props } = init;
     this.id = id ?? createId();
-    this.canvas = createCanvas(width, height);
+    this.isGroup = !!group;
+    this.parentId = parentId ?? null;
+    this.canvas = createCanvas(group ? 1 : width, group ? 1 : height);
     this.ctx = get2d(this.canvas);
     this.setProps(props);
   }
@@ -97,14 +122,19 @@ export class Layer implements LayerProps {
     return this.canvas.height;
   }
 
+  /** Textová data, pokud je vrstva textová (vázaná na aktuální plátno – viz core/text.ts). */
+  get text(): TextData | null {
+    return getTextData(this.canvas);
+  }
+
   /** Maska existuje a je zapnutá. */
   get hasActiveMask(): boolean {
     return this.mask !== null && this.maskEnabled;
   }
 
   getProps(): LayerProps {
-    const { name, visible, opacity, blendMode, x, y, maskEnabled } = this;
-    return { name, visible, opacity, blendMode, x, y, maskEnabled };
+    const { name, visible, opacity, blendMode, x, y, maskEnabled, lockTransparency, lockPixels, lockPosition, clipped } = this;
+    return { name, visible, opacity, blendMode, x, y, maskEnabled, lockTransparency, lockPixels, lockPosition, clipped };
   }
 
   setProps(props: Partial<LayerProps>): void {
@@ -116,6 +146,8 @@ export class Layer implements LayerProps {
   duplicate(): Layer {
     const copy = new Layer(this.width, this.height, { ...this.getProps(), name: `${this.name} kopie` });
     copy.ctx.drawImage(this.canvas, 0, 0);
+    const text = this.text;
+    if (text) setTextData(copy.canvas, text);
     if (this.mask) copy.mask = cloneCanvas(this.mask);
     return copy;
   }

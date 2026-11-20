@@ -12,10 +12,14 @@ interface Slot {
 }
 
 const LONG_PRESS_MS = 350;
+/** Výška tlačítka nástroje včetně mezery (viz .tool-btn v CSS). */
+const SLOT_HEIGHT = 29;
+const MAX_COLUMNS = 3;
 
 /**
  * Levý panel nástrojů. Nástroje jsou ve skupinách (jako ve Photopea) – tlačítko ukazuje
  * naposledy použitý nástroj skupiny, pravé tlačítko / podržení rozbalí celou skupinu.
+ * Když se nástroje nevejdou pod sebe (nízké okno), rozloží se do více sloupců – lišta se nikdy neposouvá.
  */
 export class Toolbar {
   readonly element: HTMLElement;
@@ -60,15 +64,28 @@ export class Toolbar {
       if (this.flyout && !this.flyout.contains(e.target as Node)) this.closeFlyout();
     });
 
-    this.element = h(
-      'aside',
-      { class: 'toolbar' },
-      ...this.slots.map((s) => s.button),
+    const bottom = h(
+      'div',
+      { class: 'toolbar-bottom' },
       h('div', { class: 'toolbar-sep' }),
       this.createColorWell(),
       iconButton(CircleDot, 'Rychlá maska (Q) – připravujeme', undefined, 'tool-btn'),
       iconButton(Monitor, 'Režim zobrazení (F) – připravujeme', undefined, 'tool-btn'),
     );
+    this.element = h('aside', { class: 'toolbar' }, h('div', { class: 'tool-grid' }, ...this.slots.map((s) => s.button)), bottom);
+
+    // Počet sloupců podle dostupné výšky (padding lišty 8 px).
+    let columns = 0;
+    new ResizeObserver(() => {
+      const available = this.element.clientHeight - 8 - bottom.offsetHeight;
+      if (available <= 0) return;
+      const needed = this.slots.length * SLOT_HEIGHT;
+      const next = Math.max(1, Math.min(MAX_COLUMNS, Math.ceil(needed / available)));
+      if (next === columns) return;
+      columns = next;
+      this.element.style.setProperty('--cols', String(next));
+      this.closeFlyout();
+    }).observe(this.element);
 
     editor.on('tool', (tool) => {
       for (const slot of this.slots) {
