@@ -84,6 +84,33 @@ export class SetLayerPropsCommand implements Command {
   }
 }
 
+/**
+ * Výměna celého seznamu vrstev (sloučit dolů / viditelné, zploštit). Vrstvy se nekopírují –
+ * příkaz drží reference na seznam před a po, sloučená vrstva je nový objekt.
+ */
+export class LayerListCommand implements Command {
+  private readonly before: Layer[];
+  private readonly beforeActive: string | null;
+
+  constructor(
+    private readonly doc: ImageDocument,
+    private readonly after: Layer[],
+    private readonly afterActive: string | null,
+    readonly label: string,
+  ) {
+    this.before = [...doc.layers];
+    this.beforeActive = doc.activeLayerId;
+  }
+
+  do(): void {
+    this.doc.setLayers(this.after, this.afterActive);
+  }
+
+  undo(): void {
+    this.doc.setLayers(this.before, this.beforeActive);
+  }
+}
+
 /** Několik příkazů jako jeden krok historie (do v pořadí, undo pozpátku). */
 export class MacroCommand implements Command {
   constructor(

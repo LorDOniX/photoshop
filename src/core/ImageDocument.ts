@@ -93,6 +93,13 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
     this.changed({ kind: 'structure' });
   }
 
+  /** Nahradí celý seznam vrstev (slučování, zploštění). */
+  setLayers(layers: Layer[], activeId: string | null): void {
+    this.layers = [...layers];
+    this.activeLayerId = activeId && this.getLayer(activeId) ? activeId : (this.layers.at(-1)?.id ?? null);
+    this.changed({ kind: 'structure' });
+  }
+
   setActive(id: string | null): void {
     if (id !== null && !this.getLayer(id)) return;
     if (this.activeLayerId === id) return;

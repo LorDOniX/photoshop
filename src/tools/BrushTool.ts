@@ -2,14 +2,15 @@ import { Brush, Eraser } from 'lucide';
 import { PaintCommand, type PaintTargetKind } from '../core/commands/layerCommands';
 import { clipRect, cloneCanvas, createCanvas, get2d, unionRect, type Rect } from '../core/canvas';
 import type { Editor } from '../core/Editor';
-import type { Layer } from '../core/Layer';
+import type { BlendMode, Layer } from '../core/Layer';
 import { luminance, paintMaskValue } from '../core/mask';
 import { maskToCanvas } from '../core/selection/raster';
 import type { Tool, ToolOptionsUI, ToolPointer } from './Tool';
 import { h } from '../ui/dom';
 import { selectField, SliderField } from '../ui/controls';
 import type { IconNode } from '../ui/icons';
-import { PAINT_BLEND_MODES, pressureToggles } from './optionParts';
+import { eyedropperOf } from './EyedropperTool';
+import { blendModeSelect, pressureToggles } from './optionParts';
 
 interface Stroke {
   layer: Layer;
@@ -38,6 +39,10 @@ export class BrushTool implements Tool {
   readonly shortcut: string;
   readonly cursor = 'none';
   private current: Stroke | null = null;
+  /** Alt+klik nabírá barvu (kapátko) místo kreslení. */
+  private picking = false;
+  /** Režim prolnutí tahu (jen štětec; guma vždy maže). */
+  blendMode: BlendMode = 'source-over';
 
   constructor(
     private readonly editor: Editor,
@@ -52,6 +57,12 @@ export class BrushTool implements Tool {
 
   pointerDown(p: ToolPointer): void {
     if (p.button !== 0) return;
+    const picker = p.altKey && this.mode === 'brush' ? eyedropperOf(this.editor) : null;
+    if (picker) {
+      this.picking = true;
+      picker.begin(p, 'color');
+      return;
+    }
     const target = this.editor.paintTarget();
     if (!target || !target.layer.visible) return;
     const { layer, canvas } = target;
@@ -84,6 +95,7 @@ export class BrushTool implements Tool {
   }
 
   pointerMove(p: ToolPointer): void {
+    if (this.picking) return eyedropperOf(this.editor)?.move(p);
     const s = this.current;
     if (!s) return;
     const local = { x: p.x - s.layer.x, y: p.y - s.layer.y };
@@ -92,6 +104,11 @@ export class BrushTool implements Tool {
   }
 
   pointerUp(): void {
+    if (this.picking) {
+      this.picking = false;
+      eyedropperOf(this.editor)?.end();
+      return;
+    }
     const s = this.current;
     this.current = null;
     if (!s?.bounds) return;
@@ -158,13 +175,14 @@ export class BrushTool implements Tool {
       paintMaskValue(lc, s.stroke, 0, 0, s.maskValue, s.opacity);
     } else {
       lc.globalAlpha = s.opacity;
-      lc.globalCompositeOperation = this.mode === 'eraser' ? 'destination-out' : 'source-over';
+      lc.globalCompositeOperation = this.mode === 'eraser' ? 'destination-out' : this.blendMode;
       lc.drawImage(s.stroke, x, y, width, height, x, y, width, height);
     }
     lc.restore();
     this.editor.doc.notifyPixels(s.layer.id);
   }
   drawOverlay(ctx: CanvasRenderingContext2D, editor: Editor): void {
+    if (this.picking) return eyedropperOf(editor)?.drawOverlay(ctx, editor);
     if (!editor.pointer) return;
     const { x, y } = editor.viewport.toScreen(editor.pointer.x, editor.pointer.y);
     const r = Math.max(1, (editor.settings.brushSize / 2) * editor.viewport.zoom);
@@ -209,7 +227,7 @@ export class BrushTool implements Tool {
       'div',
       { class: 'tool-options' },
       size.element,
-      this.mode === 'brush' ? selectField('Režim prolnutí:', PAINT_BLEND_MODES) : selectField('Režim:', ['Štětec', 'Tužka']),
+      this.mode === 'brush' ? blendModeSelect(this.blendMode, (v) => (this.blendMode = v)) : selectField('Režim:', ['Štětec', 'Tužka']),
       opacity.element,
       // Připravené volby (zatím bez funkce):
       new SliderField({ label: 'Tok:', value: 100, min: 1, max: 100, unit: '%' }).element,

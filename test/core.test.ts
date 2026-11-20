@@ -11,8 +11,10 @@ import { History, type Command } from '../src/core/History';
 import { ImageDocument } from '../src/core/ImageDocument';
 import { Layer } from '../src/core/Layer';
 import { luminance } from '../src/core/mask';
+import { mergeDownTarget, visibleLayers } from '../src/core/merge';
 import {
   AddLayerCommand,
+  LayerListCommand,
   MoveLayerCommand,
   RemoveLayerCommand,
   SetLayerPropsCommand,
@@ -147,5 +149,33 @@ describe('masky vrstev', () => {
     expect(luminance('#000000')).toBe(0);
     expect(luminance('#ffffff')).toBe(1);
     expect(luminance('#808080')).toBeCloseTo(0.502, 2);
+  });
+});
+
+describe('slučování vrstev', () => {
+  it('sloučit dolů jde jen s viditelnou vrstvou, která má vrstvu pod sebou', () => {
+    const doc = docWithLayers('a', 'b', 'c');
+    doc.setActive('a');
+    expect(mergeDownTarget(doc)).toBeNull();
+    doc.setActive('c');
+    expect(mergeDownTarget(doc)?.id).toBe('b');
+    doc.updateLayer('c', { visible: false });
+    expect(mergeDownTarget(doc)).toBeNull();
+    expect(visibleLayers(doc).map((l) => l.id)).toEqual(['a', 'b']);
+  });
+
+  it('výměna seznamu vrstev jde vrátit a zopakovat', () => {
+    const doc = docWithLayers('a', 'b', 'c');
+    doc.setActive('b');
+    const merged = new Layer(10, 10, { id: 'm', name: 'Sloučeno' });
+    const h = new History();
+    h.execute(new LayerListCommand(doc, [doc.layers[0], merged], 'm', 'Sloučit'));
+    expect(order(doc)).toEqual(['a', 'm']);
+    expect(doc.activeLayerId).toBe('m');
+    h.undo();
+    expect(order(doc)).toEqual(['a', 'b', 'c']);
+    expect(doc.activeLayerId).toBe('b');
+    h.redo();
+    expect(order(doc)).toEqual(['a', 'm']);
   });
 });

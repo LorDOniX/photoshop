@@ -1,11 +1,12 @@
 import type { Action } from '../core/actions';
 import type { Editor } from '../core/Editor';
 import { createBlankDocument } from '../core/ImageDocument';
+import { mergeDownTarget, visibleLayers } from '../core/merge';
 import type { SelectionMask } from '../core/selection/SelectionMask';
 import { exportImage, type ExportFormat } from '../io/export';
 import { baseName, canvasToBlob, downloadBlob, pickFile } from '../io/files';
 import { PROJECT_EXTENSION, saveProject } from '../io/project';
-import { promptNumber, showForm, showNewDocumentDialog } from '../ui/dialogs';
+import { confirmDialog, promptNumber, showForm, showNewDocumentDialog } from '../ui/dialogs';
 import type { TransformTool } from '../tools/TransformTool';
 
 /** Kopie do systémové schránky (aby šlo vkládat i do jiných aplikací); selhání se ignoruje. */
@@ -433,6 +434,32 @@ export function registerActions(editor: Editor, app: AppContext): void {
       shortcuts: ['Ctrl+Shift+['],
       run: () => editor.moveActiveLayer(-editor.doc.layers.length),
       isEnabled: () => hasLayer() && activeIndex() > 0,
+    },
+
+    // ---- Slučování ----
+    {
+      id: 'layer.mergeDown',
+      label: 'Sloučit dolů',
+      shortcuts: ['Ctrl+E'],
+      run: () => void editor.mergeDown(),
+      isEnabled: () => mergeDownTarget(editor.doc) !== null,
+    },
+    {
+      id: 'layer.mergeVisible',
+      label: 'Sloučit viditelné',
+      shortcuts: ['Ctrl+Shift+E'],
+      run: () => void editor.mergeVisible(),
+      isEnabled: () => visibleLayers(editor.doc).length > 1,
+    },
+    {
+      id: 'layer.flatten',
+      label: 'Zploštit obraz',
+      run: async () => {
+        const hidden = editor.doc.layers.filter((l) => !l.visible).length;
+        if (hidden && !(await confirmDialog('Zploštit obraz', `Zahodit skryté vrstvy (${hidden})?`))) return;
+        editor.flattenImage();
+      },
+      isEnabled: () => editor.doc.layers.length > 1,
     },
 
     // ---- Zobrazení ----

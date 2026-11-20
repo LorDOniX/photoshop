@@ -182,3 +182,8 @@ export function showNewDocumentDialog(defaults: { width: number; height: number 
     width.select();
   });
 }
+
+/** Potvrzovací dialog (OK / Zrušit) ve stylu aplikace. */
+export async function confirmDialog(title: string, message: string): Promise<boolean> {
+  return (await showForm(title, [{ kind: 'note', key: 'message', label: message }])) !== null;
+}

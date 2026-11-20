@@ -1,7 +1,7 @@
 import { createCanvas, get2d, type Rect } from '../canvas';
 import type { ImageDocument } from '../ImageDocument';
 import type { Layer } from '../Layer';
-import { compositeDocument } from '../../render/composite';
+import { compositeDocument, compositeLayers } from '../../render/composite';
 import { computeEdgeMap } from './livewire';
 import { SelectionMask } from './SelectionMask';
 
@@ -93,32 +93,34 @@ interface PixelCache {
 }
 const pixelCache = new WeakMap<ImageDocument, PixelCache>();
 
+/** Odkud se berou pixely: aktivní vrstva, aktivní a nižší, nebo celý složený obraz. */
+export type SampleSource = 'layer' | 'below' | 'all';
+
 /**
- * Pixely dokumentu v souřadnicích dokumentu – buď složený obraz (`sampleAll`), nebo jen aktivní vrstva.
- * Cache se zneplatní při jakékoli změně dokumentu.
+ * Pixely dokumentu v souřadnicích dokumentu – složený obraz (`true` / `'all'`), aktivní vrstva
+ * (`false` / `'layer'`), nebo vrstvy od spodní po aktivní (`'below'`). Cache se zneplatní při jakékoli změně dokumentu.
  */
-export function samplePixels(doc: ImageDocument, sampleAll: boolean): ImageData {
-  return sampleEntry(doc, sampleAll).image;
+export function samplePixels(doc: ImageDocument, source: boolean | SampleSource): ImageData {
+  return sampleEntry(doc, source === true ? 'all' : source === false ? 'layer' : source).image;
 }
 
 /** Mapa hran pro magnetické laso (ze složeného obrazu). */
 export function edgeMap(doc: ImageDocument): Uint8Array {
-  const entry = sampleEntry(doc, true);
+  const entry = sampleEntry(doc, 'all');
   entry.edges ??= computeEdgeMap(entry.image.data, doc.width, doc.height);
   return entry.edges;
 }
 
-function sampleEntry(doc: ImageDocument, sampleAll: boolean): PixelCache {
-  const key = sampleAll ? 'all' : `layer:${doc.activeLayerId}`;
+function sampleEntry(doc: ImageDocument, source: SampleSource): PixelCache {
+  const key = source === 'all' ? 'all' : `${source}:${doc.activeLayerId}`;
   const cached = pixelCache.get(doc);
   if (cached && cached.version === doc.version && cached.key === key) return cached;
   const canvas = createCanvas(doc.width, doc.height);
   const ctx = get2d(canvas);
-  if (sampleAll) compositeDocument(doc, ctx);
-  else {
-    const layer = doc.activeLayer;
-    if (layer) ctx.drawImage(layer.canvas, layer.x, layer.y);
-  }
+  const layer = doc.activeLayer;
+  if (source === 'all') compositeDocument(doc, ctx);
+  else if (source === 'below') compositeLayers(ctx, layer ? doc.layers.slice(0, doc.indexOf(layer.id) + 1) : []);
+  else if (layer) ctx.drawImage(layer.canvas, layer.x, layer.y);
   const entry: PixelCache = { version: doc.version, key, image: ctx.getImageData(0, 0, doc.width, doc.height) };
   pixelCache.set(doc, entry);
   return entry;

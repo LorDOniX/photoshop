@@ -3,7 +3,6 @@ import {
   AlignLeft,
   AlignRight,
   Bandage,
-  Blend,
   Circle,
   Contrast,
   Crosshair,
@@ -14,12 +13,10 @@ import {
   Highlighter,
   Minus,
   MousePointer2,
-  PaintBucket,
   PenLine,
   PenTool,
   Pencil,
   Pentagon,
-  Pipette,
   Plus,
   Pointer,
   Replace,
@@ -73,12 +70,6 @@ export class PlaceholderTool implements Tool {
 
 const sliceOptions = () => [selectField('Styl:', ['Normální', 'Pevný poměr', 'Pevná velikost']), textButton('Řezy z vodítek')];
 
-const eyedropperOptions = () => [
-  selectField('Velikost vzorku:', ['1 × 1', '3 × 3', '5 × 5', '11 × 11', '31 × 31']),
-  selectField('Zdroj:', SAMPLE_SOURCES),
-  checkbox('Vzorkovací kroužek', true),
-];
-
 const brushPreset = () => slider('Štětec:', 20, 500, ' px', 1);
 
 const healingOptions = () => [brushPreset(), selectField('Zdroj:', SAMPLE_SOURCES), ...pressureToggles(), checkbox('Retušovat výběr')];
@@ -114,26 +105,6 @@ const cloneOptions = () => [
 const bgEraserOptions = () => [brushPreset(), slider('Tolerance:', 50), selectField('Omezení:', ['Souvislé', 'Nesouvislé']), checkbox('Chránit barvu popředí')];
 
 const magicEraserOptions = () => [slider('Tolerance:', 32, 255, ''), checkbox('Vyhlazování', true), checkbox('Souvislé', true), checkbox('Ze všech vrstev'), slider('Krytí:', 100)];
-
-const gradientOptions = () => [
-  h('span', { class: 'gradient-preview', title: 'Přechod – připravujeme' }),
-  selectField(null, ['Lineární', 'Kruhový', 'Úhlový', 'Zrcadlený', 'Kosočtverečný']),
-  selectField('Režim prolnutí:', PAINT_BLEND_MODES),
-  slider('Krytí:', 100),
-  checkbox('Obrátit'),
-  checkbox('Rozptýlení', true),
-  checkbox('Nová výplňová vrstva'),
-];
-
-const fillOptions = () => [
-  selectField('Výplň:', ['Popředí', 'Vzorek']),
-  selectField('Režim prolnutí:', PAINT_BLEND_MODES),
-  slider('Krytí:', 100),
-  slider('Tolerance:', 32, 255, ''),
-  checkbox('Vyhlazování', true),
-  checkbox('Souvislé', true),
-  checkbox('Ze všech vrstev'),
-];
 
 const strengthOptions = () => [brushPreset(), slider('Síla:', 50), checkbox('Ze všech vrstev'), ...pressureToggles()];
 
@@ -207,7 +178,6 @@ export function createPlaceholderTools(): Tool[] {
     t('crop-perspective', 'Perspektivní oříznutí', Triangle, 'C', () => [...sizeFields(), iconButton(X, 'Zrušit'), iconButton(Check, 'Potvrdit')]),
     t('slice', 'Řez', Scissors, 'C', sliceOptions),
     t('slice-select', 'Výběr řezu', Pointer, 'C', () => [textButton('Rozdělit…')]),
-    t('eyedropper', 'Kapátko', Pipette, 'I', eyedropperOptions),
     t('color-sampler', 'Vzorkovač barev', Crosshair, 'I', () => [selectField('Velikost vzorku:', ['1 × 1', '3 × 3', '5 × 5']), textButton('Vymazat vše')]),
     t('ruler', 'Pravítko', Ruler, 'I', () => [textField('X:', '0', 40), textField('Y:', '0', 40), textField('Š:', '0', 40), textField('V:', '0', 40), textField('Ú:', '0°', 40), textButton('Narovnat vrstvu'), textButton('Vymazat')]),
     t('spot-healing', 'Bodový retušovací štětec', Bandage, 'J', healingOptions),
@@ -219,8 +189,6 @@ export function createPlaceholderTools(): Tool[] {
     t('stamp', 'Razítko', Stamp, 'S', cloneOptions),
     t('bg-eraser', 'Guma pozadí', Eraser, 'E', bgEraserOptions),
     t('magic-eraser', 'Kouzelná guma', Sparkles, 'E', magicEraserOptions),
-    t('gradient', 'Přechod', Blend, 'G', gradientOptions),
-    t('fill', 'Plechovka', PaintBucket, 'G', fillOptions),
     t('blur', 'Rozostření', Droplet, undefined, strengthOptions),
     t('sharpen', 'Zostření', Triangle, undefined, strengthOptions),
     t('smudge', 'Rozmazání', Waves, undefined, strengthOptions),

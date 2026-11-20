@@ -133,9 +133,9 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     todo('Seskupit vrstvy', 'Ctrl+G'),
     sub('Uspořádat', ['layer.front', 'layer.up', 'layer.down', 'layer.back']),
     '-',
-    todo('Sloučit dolů', 'Ctrl+E'),
-    todo('Sloučit viditelné', 'Ctrl+Shift+E'),
-    todo('Zploštit obraz'),
+    'layer.mergeDown',
+    'layer.mergeVisible',
+    'layer.flatten',
   ];
 
   const select: MenuItem[] = [
@@ -229,8 +229,9 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     '-',
     sub('Rastrová maska', ['mask.revealAll', 'mask.hideAll', 'mask.revealSelection', 'mask.hideSelection', '-', 'mask.delete', 'mask.apply']),
     '-',
-    todo('Sloučit dolů'),
-    todo('Zploštit obraz'),
+    'layer.mergeDown',
+    'layer.mergeVisible',
+    'layer.flatten',
     '-',
     todoSub('Barva', ['Žádná', 'Červená', 'Oranžová', 'Žlutá', 'Zelená', 'Modrá', 'Fialová', 'Šedá']),
   ];

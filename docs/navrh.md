@@ -83,23 +83,38 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
   kopírovat / kopírovat sloučené / vyjmout / vložit na původní místo, vrstva kopírováním / vyjmutím (Ctrl+J / Shift+Ctrl+J), oříznout plátno na výběr.
 - Výpočty zatím běží v hlavním vlákně (pro běžné velikosti obrázků stačí); přesun do Web Workeru je připravený tím, že jádro výběru je čistý kód bez DOM.
 
+## Verze 0.2.x – 0.4 (hotovo)
+
+- **0.2.x:** přesun vybraných pixelů nástrojem Přesun (plovoucí výběr, Alt = duplikát, šipky), posun obrysu výběru,
+  transformace výběru, Zvětšit / Podobné, Upřesnit okraj, Rychlý výběr.
+- **0.3 – masky vrstev:** `Layer.mask` (hodnota v alfa kanálu), přidat / skrýt / z výběru / z průhlednosti, upravovat masku
+  (`Ctrl+\`), použít / smazat / vypnout masku, výběr z masky; ukládá se do `.ptsp`.
+- **0.4 – velikost a transformace:** Velikost obrazu a plátna (s kotvou), nástroj Oříznutí, Ořezat, Odkrýt vše,
+  otočení / převrácení plátna i vrstvy, volná transformace (`Ctrl+Alt+T`). Vše jako příkazy se snapshotem (`DocStateCommand`).
+
+## Verze 0.5 – Kreslicí nástroje a slučování (hotovo)
+
+- **Kapátko (I)** – bod nebo průměr 3×3 … 31×31, zdroj aktuální vrstva / aktuální a nižší / všechny vrstvy, vzorkovací kroužek
+  (nahoře nová, dole původní barva); Alt = barva pozadí. Ve štětci, plechovce a přechodu funguje Alt+klik jako kapátko
+  (sdílí volby nástroje Kapátko – `ColorPicker` v `tools/EyedropperTool.ts`).
+- **Plechovka (G)** – oblast podobné barvy (stejný flood fill jako kouzelná hůlka), barva popředí / pozadí, režim prolnutí,
+  krytí, tolerance, vyhlazování (poloprůhledný lem `softenEdge`), souvislé, ze všech vrstev; omezená výběrem, v masce kreslí jasem.
+- **Přechod (G)** – lineární, kruhový, úhlový, zrcadlený, kosočtverečný; předvolby popředí → pozadí / → průhledná / černá → bílá,
+  obrátit, rozptýlení (dither), režim prolnutí, krytí, Shift = po 45°. Počítá se po pixelech (`core/paint/gradient.ts`), protože
+  Canvas 2D neumí kosočtverečný přechod ani rozptýlení.
+- **Štětec** – funkční režim prolnutí.
+- **Slučování** – Sloučit dolů (`Ctrl+E`), Sloučit viditelné (`Ctrl+Shift+E`), Zploštit obraz (`core/merge.ts`).
+  Zápis do historie přes `LayerListCommand` (výměna seznamu vrstev, drží jen reference → levné undo).
+- Skládání vrstev je rozdělené na `drawLayer` / `compositeLayers` (podmnožina vrstev s posunem) – používá ho slučování
+  i vzorkování „aktuální a nižší“.
+
 ## Plán dalších verzí
 
-### 0.2.x – doplňky výběru
-- Přesun vybraných pixelů nástrojem Přesun (plovoucí výběr), transformace výběru, „Zvětšit“ / „Podobné“, upřesnit okraj, rychlý výběr.
-
-### 0.3 – Masky vrstev
-- `Layer.mask?: HTMLCanvasElement` (stupně šedi), `maskEnabled`, příznak „editovat masku“.
-- Kompozice: vrstva → dočasný canvas → `destination-in` s maskou → skládání do dokumentu.
-- Štětec/guma kreslí do masky (černá skrývá, bílá odkrývá); maska z výběru; použít/smazat masku. Uloží se do `.ptsp` (verze formátu 2).
-
-### 0.4 – Velikost a rozlišení
-- **Velikost obrazu** (převzorkování všech vrstev, volba kvality, zachovat poměr, DPI jako metadata).
-- **Velikost plátna** (rozšíření/oříznutí s kotvou), **oříznutí** nástrojem, otočení/převrácení.
-- Volná transformace vrstvy (měřítko, rotace) – `Ctrl+T`.
-- Vše jako příkazy se snapshotem dotčených vrstev.
+### 0.6 – Text a skupiny vrstev
+- Textová vrstva (nový typ vrstvy s vlastnostmi písma, rastrování při vykreslení, úprava dvojklikem), rastrovat vrstvu.
+- Skupiny vrstev (složky) – stromová struktura v `ImageDocument`, sbalení v panelu, `Ctrl+G`; uložení do `.ptsp` (verze formátu 3).
 
 ### Další
-- Kapátko, výplň, přechod, text; slučování vrstev (sloučit dolů, zploštit); skupiny vrstev.
+- Tužka, kouzelná guma, guma pozadí; Úpravy → Obrys…; ořezová maska.
 - Výkon: dirty-rect kompozice, cache „vrstvy pod / nad aktivní“, případně WebGL renderer; omezení paměti historie (volitelný limit / ukládání starých kroků do IndexedDB).
 - Automatické ukládání do IndexedDB, otevírání PSD (knihovna `ag-psd`).

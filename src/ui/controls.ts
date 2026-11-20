@@ -22,7 +22,7 @@ export type SelectOption = string | { value: string; label: string };
 /** Výběrové pole; položka '-' vloží neaktivní oddělovač. */
 export function selectField(
   label: string | null,
-  options: SelectOption[],
+  options: readonly SelectOption[],
   value?: string,
   onChange?: (value: string) => void,
 ): HTMLElement {

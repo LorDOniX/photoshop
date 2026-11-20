@@ -9,6 +9,9 @@ import { baseName } from './io/files';
 import { PROJECT_EXTENSION, loadProject } from './io/project';
 import { BrushTool } from './tools/BrushTool';
 import { CropTool } from './tools/CropTool';
+import { EyedropperTool } from './tools/EyedropperTool';
+import { FillTool } from './tools/FillTool';
+import { GradientTool } from './tools/GradientTool';
 import { TransformTool } from './tools/TransformTool';
 import { MoveTool } from './tools/MoveTool';
 import { HandTool, ZoomTool } from './tools/NavigationTools';
@@ -45,6 +48,9 @@ editor.tools.register(
   new QuickSelectTool(editor),
   new BrushTool(editor, 'brush'),
   new BrushTool(editor, 'eraser'),
+  new EyedropperTool(editor),
+  new GradientTool(editor),
+  new FillTool(editor),
   new HandTool(editor),
   new CropTool(editor),
   new TransformTool(editor),

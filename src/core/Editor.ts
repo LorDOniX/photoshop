@@ -1,5 +1,6 @@
 import {
   AddLayerCommand,
+  LayerListCommand,
   MacroCommand,
   MoveLayerCommand,
   PaintCommand,
@@ -18,6 +19,7 @@ import { cropDocument, flipDocument, resizeCanvas, resizeImage, revealAllBounds,
 import type { Transform } from './transform/geometry';
 import { TransformSession } from './transform/session';
 import { Layer, type LayerProps } from './Layer';
+import { flatten, mergeDown, mergeVisible, type LayerList } from './merge';
 import { createMask, luminance, maskFromAlpha, maskFromSelection, paintMaskValue } from './mask';
 import { extractPixels, layerAlphaMask, maskToCanvas, rasterizeMask, samplePixels } from './selection/raster';
 import { growSelection } from './selection/floodFill';
@@ -211,6 +213,29 @@ export class Editor extends Emitter<EditorEvents> {
     const command = new AddLayerCommand(this.doc, layer, this.insertionIndex(), label);
     this.execute(command);
     return command;
+  }
+
+  // ---- slučování vrstev (0.5) ----
+
+  private applyLayerList(list: LayerList | null, label: string): boolean {
+    if (!list) return false;
+    this.execute(new LayerListCommand(this.doc, list.layers, list.active, label));
+    return true;
+  }
+
+  /** Sloučí aktivní vrstvu s vrstvou pod ní (Ctrl+E). */
+  mergeDown(): boolean {
+    return this.applyLayerList(mergeDown(this.doc), 'Sloučit dolů');
+  }
+
+  /** Sloučí všechny viditelné vrstvy do jedné (Ctrl+Shift+E). */
+  mergeVisible(): boolean {
+    return this.applyLayerList(mergeVisible(this.doc), 'Sloučit viditelné');
+  }
+
+  /** Zploští obraz do jedné vrstvy Pozadí (skryté vrstvy se zahodí). */
+  flattenImage(): void {
+    this.applyLayerList(flatten(this.doc), 'Zploštit obraz');
   }
 
   // ---- výběr ----
