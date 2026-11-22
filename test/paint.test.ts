@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { averageColor, parseHex, toHex } from '../src/core/color';
 import { restoreAlphaData } from '../src/core/paint/alpha';
 import { multiplyMasks, softenEdge } from '../src/core/paint/fill';
-import { buildLut, gradientParam, presetStops, renderGradient, snapAngle } from '../src/core/paint/gradient';
+import { buildLut, gradientParam, gradientStops, presetStops, renderGradient, reverseGradient, sampleGradient, snapAngle, twoColorGradient, type GradientDef } from '../src/core/paint/gradient';
 import { SelectionMask } from '../src/core/selection/SelectionMask';
 
 /** RGBA buffer w × h vyplněný barvou. */
@@ -123,5 +123,40 @@ describe('zámek průhlednosti', () => {
     const before = new Uint8ClampedArray([0, 0, 255, 128, 0, 0, 0, 0, 0, 0, 0, 200]);
     restoreAlphaData(after, before);
     expect(Array.from(after)).toEqual([255, 0, 0, 128, 0, 0, 0, 0, 9, 9, 9, 200]);
+  });
+});
+
+describe('vícebarevné přechody', () => {
+  const def: GradientDef = {
+    colors: [
+      { pos: 0, color: '#ff0000' },
+      { pos: 0.5, color: '#00ff00' },
+      { pos: 1, color: '#0000ff' },
+    ],
+    alphas: [
+      { pos: 0, opacity: 1 },
+      { pos: 0.25, opacity: 0 },
+      { pos: 1, opacity: 1 },
+    ],
+  };
+
+  it('barva a krytí se interpolují zvlášť', () => {
+    expect(sampleGradient(def, 0.25)).toEqual({ r: 127.5, g: 127.5, b: 0, a: 0 });
+    expect(sampleGradient(def, 0.75)).toEqual({ r: 0, g: 127.5, b: 127.5, a: (2 / 3) * 255 });
+    expect(sampleGradient(def, -1).r).toBe(255);
+  });
+
+  it('zastávky = sjednocení poloh, tabulka sedí', () => {
+    expect(gradientStops(def).map((s) => s.pos)).toEqual([0, 0.25, 0.5, 1]);
+    const lut = buildLut(gradientStops(def));
+    const at = (t: number) => Math.round(t * 1023) * 4;
+    expect(Math.round(lut[at(0.25) + 3])).toBeLessThan(2);
+    expect(Math.round(lut[at(0.5) + 1])).toBe(255);
+  });
+
+  it('obrácení a dvoubarevný přechod', () => {
+    expect(reverseGradient(def).colors.map((c) => c.color)).toEqual(['#0000ff', '#00ff00', '#ff0000']);
+    expect(reverseGradient(def).alphas.map((a) => a.pos)).toEqual([0, 0.75, 1]);
+    expect(gradientStops(twoColorGradient('#000000', '#ffffff')).length).toBe(2);
   });
 });

@@ -1,4 +1,5 @@
 import { createCanvas, get2d, unionRect, type Rect } from './canvas';
+import { effectPadding } from './effects';
 import { buildTree, effectivelyVisible, findNode, flattenTree, replaceNode, subtreeItems, type FlatList, type TreeNode } from './groups';
 import type { ImageDocument } from './ImageDocument';
 import { Layer } from './Layer';
@@ -17,9 +18,15 @@ export function layerRect(layer: Layer): Rect {
   return { x: layer.x, y: layer.y, width: layer.width, height: layer.height };
 }
 
+/** Obdélník vrstvy včetně přesahu stylů vrstvy (stín, záře, tah) – sloučení je zapéká do pixelů. */
+export function layerRectWithEffects(layer: Layer): Rect {
+  const pad = effectPadding(layer.effects);
+  return { x: layer.x - pad, y: layer.y - pad, width: layer.width + pad * 2, height: layer.height + pad * 2 };
+}
+
 function boundsOf(layers: readonly Layer[]): Rect | null {
   let rect: Rect | null = null;
-  for (const l of layers) if (!l.isGroup) rect = unionRect(rect, layerRect(l));
+  for (const l of layers) if (!l.isGroup) rect = unionRect(rect, layerRectWithEffects(l));
   return rect;
 }
 
@@ -32,7 +39,8 @@ export function mergeDownTarget(doc: ImageDocument): Layer | null {
   if (!upper || !upper.visible) return null;
   if (upper.isGroup) return boundsOf(groupContent(doc, upper)) ? upper : null;
   const below = doc.layers[doc.indexOf(upper.id) - 1];
-  return below && !below.isGroup && below.parentId === upper.parentId ? below : null;
+  // Do vrstvy úprav slučovat nejde (nemá pixely).
+  return below && !below.isGroup && !below.adjustment && below.parentId === upper.parentId ? below : null;
 }
 
 /** Vrstvy uvnitř skupiny (bez jejího záhlaví). */
@@ -51,8 +59,9 @@ export function mergeDown(doc: ImageDocument): LayerList | null {
   const lower = mergeDownTarget(doc);
   if (!upper || !lower) return null;
   if (upper.isGroup) return mergeGroup(doc, upper);
-  const rect = unionRect(layerRect(lower), layerRect(upper));
-  const merged = new Layer(rect.width, rect.height, { ...lower.getProps(), x: rect.x, y: rect.y, visible: true, maskEnabled: true });
+  const rect = unionRect(layerRectWithEffects(lower), layerRectWithEffects(upper));
+  // Styly obou vrstev se zapečou do pixelů – výsledek už žádné nemá.
+  const merged = new Layer(rect.width, rect.height, { ...lower.getProps(), x: rect.x, y: rect.y, visible: true, maskEnabled: true, effects: null, fillOpacity: 1 });
   merged.parentId = lower.parentId;
   drawLayer(merged.ctx, lower, rect.x, rect.y, false);
   // Ořezaná vrstva sloučená do svého základu se do něj ořízne.

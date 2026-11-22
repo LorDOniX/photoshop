@@ -9,6 +9,8 @@ import { Layer } from './core/Layer';
 import { baseName } from './io/files';
 import { PROJECT_EXTENSION, loadProject } from './io/project';
 import { AutoSaver, deleteAutosave, listAutosaves } from './io/autosave';
+import { loadUserPatterns } from './io/library';
+import { isPsdFile, loadPsd } from './io/psd';
 import { BrushTool } from './tools/BrushTool';
 import { CropTool } from './tools/CropTool';
 import { EyedropperTool } from './tools/EyedropperTool';
@@ -20,6 +22,9 @@ import { TransformTool } from './tools/TransformTool';
 import { MoveTool } from './tools/MoveTool';
 import { HandTool, ZoomTool } from './tools/NavigationTools';
 import { createPlaceholderTools } from './tools/PlaceholderTools';
+import { StampTool } from './tools/StampTool';
+import { PatchTool } from './tools/PatchTool';
+import { BackgroundEraserTool } from './tools/BackgroundEraserTool';
 import { LassoTool } from './tools/selection/LassoTool';
 import { MagicWandTool } from './tools/selection/MagicWandTool';
 import { MagneticLassoTool } from './tools/selection/MagneticLassoTool';
@@ -34,15 +39,20 @@ import { MenuBar } from './ui/MenuBar';
 import { createChannelsPanel, createPathsPanel, createSwatchesPanel } from './ui/MiscPanels';
 import { OptionsBar } from './ui/OptionsBar';
 import { Toolbar } from './ui/Toolbar';
-import { confirmDialog } from './ui/dialogs';
+import { confirmDialog, showMessage } from './ui/dialogs';
+import { idle } from './ui/busy';
+import { showToast } from './ui/toast';
 import { h } from './ui/dom';
 
 const editor = new Editor();
 // Uložené předvolby (limit paměti historie).
 const prefs = loadPreferences();
+// Uživatelské vzorky z knihovny (asynchronně – vrstvy s nimi se překreslí, až se načtou).
+void loadUserPatterns();
 if (prefs.historyMemoryLimit) editor.setHistoryMemoryLimit(prefs.historyMemoryLimit);
 // Jen ve vývojovém režimu – pro ladění v konzoli prohlížeče.
-if (import.meta.env.DEV) Object.assign(window, { editor });
+if (import.meta.env.DEV) Object.assign(window, { editor, idle });
+editor.on('notice', (message) => showToast(message));
 
 // ---- nástroje ----
 editor.tools.register(
@@ -61,6 +71,12 @@ editor.tools.register(
   new EyedropperTool(editor),
   new GradientTool(editor),
   new FillTool(editor),
+  new StampTool(editor, 'clone'),
+  new StampTool(editor, 'pattern'),
+  new StampTool(editor, 'heal'),
+  new StampTool(editor, 'spot'),
+  new PatchTool(editor),
+  new BackgroundEraserTool(editor),
   new TextTool(editor),
   new HandTool(editor),
   new CropTool(editor),
@@ -79,7 +95,7 @@ const TOOLBAR_GROUPS = [
   ['eyedropper', 'color-sampler', 'ruler'],
   ['spot-healing', 'healing', 'patch', 'red-eye'],
   ['brush', 'pencil', 'color-replace'],
-  ['stamp'],
+  ['stamp', 'pattern-stamp'],
   ['eraser', 'bg-eraser', 'magic-eraser'],
   ['gradient', 'fill'],
   ['blur', 'sharpen', 'smudge'],
@@ -98,6 +114,12 @@ function isProjectFile(file: File): boolean {
 }
 
 async function openFile(file: File): Promise<void> {
+  if (isPsdFile(file)) {
+    const { doc, warnings } = await loadPsd(await file.arrayBuffer());
+    editor.openDocument(doc, baseName(file.name));
+    if (warnings.length) void showMessage('PSD otevřeno s omezeními', warnings);
+    return;
+  }
   if (isProjectFile(file)) {
     editor.openDocument(await loadProject(await file.arrayBuffer()), baseName(file.name));
     return;
@@ -127,7 +149,7 @@ async function closeDocument(id: string): Promise<void> {
 
 async function openFiles(files: File[]): Promise<void> {
   for (const file of files) {
-    if (isProjectFile(file) || file.type.startsWith('image/')) await openFile(file);
+    if (isProjectFile(file) || isPsdFile(file) || file.type.startsWith('image/')) await openFile(file);
   }
 }
 
@@ -292,7 +314,7 @@ area.addEventListener('drop', (e) => {
   e.preventDefault();
   void (async () => {
     for (const file of files) {
-      if (isProjectFile(file)) await openFile(file);
+      if (isProjectFile(file) || isPsdFile(file)) await openFile(file);
       else if (file.type.startsWith('image/')) await placeImage(file, baseName(file.name));
     }
   })().catch((err) => alert(`Soubor nejde otevřít: ${err instanceof Error ? err.message : err}`));

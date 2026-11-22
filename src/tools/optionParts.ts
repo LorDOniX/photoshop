@@ -6,18 +6,7 @@ import { iconButton, segmented, selectField, SliderField, textField, toggleButto
  * Sdílené (zatím převážně nefunkční) prvky lišty voleb nástrojů – podle Photopea.
  */
 
-export const PAINT_BLEND_MODES = [
-  'Normální', 'Rozpustit', '-',
-  'Ztmavit', 'Násobit', 'Ztmavit barvy', 'Lineárně ztmavit', 'Tmavší barva', '-',
-  'Zesvětlit', 'Závoj', 'Zesvětlit barvy', 'Lineárně zesvětlit', 'Světlejší barva', '-',
-  'Překrýt', 'Měkké světlo', 'Tvrdé světlo', 'Jasné světlo', 'Lineární světlo', 'Bodové světlo', 'Tvrdé míchání', '-',
-  'Rozdíl', 'Vyloučit', 'Odečíst', 'Dělit', '-',
-  'Odstín', 'Sytost', 'Barva', 'Světlost',
-];
-
 export const RATIOS = ['Volný', 'Pevný poměr', 'Pevná velikost', 'Původní poměr', '1 : 1', '4 : 3', '3 : 2', '16 : 9'];
-
-export const SAMPLE_SOURCES = ['Aktuální vrstva', 'Aktuální a nižší', 'Všechny vrstvy'];
 
 export const selectionModes = () =>
   segmented([

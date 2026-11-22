@@ -176,13 +176,13 @@ export type PaintTargetKind = 'pixels' | 'mask';
 export class PaintCommand implements Command {
   constructor(
     private readonly doc: ImageDocument,
-    private readonly layerId: string,
-    private readonly x: number,
-    private readonly y: number,
-    private readonly before: ImageData,
-    private readonly after: ImageData,
+    readonly layerId: string,
+    readonly x: number,
+    readonly y: number,
+    readonly before: ImageData,
+    readonly after: ImageData,
     readonly label = 'Malování',
-    private readonly target: PaintTargetKind = 'pixels',
+    readonly target: PaintTargetKind = 'pixels',
   ) {}
 
   get bytes(): number {

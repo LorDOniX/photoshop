@@ -1,15 +1,19 @@
 import { Blend } from 'lucide';
 import { clipRect, createCanvas, get2d } from '../core/canvas';
-import type { RGBA } from '../core/color';
 import type { Editor } from '../core/Editor';
 import type { BlendMode } from '../core/Layer';
 import {
   buildLut,
   GRADIENT_PRESETS,
   GRADIENT_TYPES,
-  presetStops,
+  gradientCss,
+  gradientStops,
+  presetGradient,
+  reverseGradient,
+  twoColorGradient,
   renderGradient,
   snapAngle,
+  type GradientDef,
   type GradientPreset,
   type GradientType,
   type Point,
@@ -17,12 +21,15 @@ import {
 import { maskToCanvas } from '../core/selection/raster';
 import { checkbox, selectField } from '../ui/controls';
 import { h } from '../ui/dom';
+import { showGradientEditor } from '../ui/gradientEditor';
 import { eyedropperOf } from './EyedropperTool';
 import { blendModeSelect, opacitySlider } from './optionParts';
 import type { Tool, ToolOptionsUI, ToolPointer } from './Tool';
 
 export interface GradientOptions {
   preset: GradientPreset;
+  /** Přechod z editoru přechodů (předvolba „Vlastní“). */
+  custom: GradientDef;
   type: GradientType;
   blendMode: BlendMode;
   /** 0..1 */
@@ -43,6 +50,7 @@ export class GradientTool implements Tool {
   readonly cursor = 'crosshair';
   readonly options: GradientOptions = {
     preset: 'fg-bg',
+    custom: twoColorGradient('#000000', '#ffffff'),
     type: 'linear',
     blendMode: 'source-over',
     opacity: 1,
@@ -108,7 +116,7 @@ export class GradientTool implements Tool {
     if (!r) return false;
 
     // Přechod vypočtený pro oblast r (v souřadnicích vrstvy).
-    const lut = buildLut(presetStops(o.preset, editor.settings.color, editor.settings.secondaryColor));
+    const lut = buildLut(gradientStops(this.gradient()));
     const image = new ImageData(r.width, r.height);
     renderGradient(image.data, r.width, r.height, layer.x + r.x, layer.y + r.y, {
       type: o.type,
@@ -144,6 +152,22 @@ export class GradientTool implements Tool {
     return true;
   }
 
+  /** Aktuální přechod (předvolba s barvami popředí / pozadí, nebo vlastní). */
+  gradient(): GradientDef {
+    const { settings } = this.editor;
+    return presetGradient(this.options.preset, settings.color, settings.secondaryColor, this.options.custom);
+  }
+
+  /** Otevře editor přechodů s aktuálním přechodem; potvrzení přepne předvolbu na „Vlastní“. */
+  async editGradient(): Promise<boolean> {
+    const { settings } = this.editor;
+    const def = await showGradientEditor(this.gradient(), settings.color, settings.secondaryColor);
+    if (!def) return false;
+    this.options.custom = def;
+    this.options.preset = 'custom';
+    return true;
+  }
+
   drawOverlay(ctx: CanvasRenderingContext2D, editor: Editor): void {
     eyedropperOf(editor)?.drawOverlay(ctx, editor);
     const d = this.drag;
@@ -172,24 +196,31 @@ export class GradientTool implements Tool {
 
   createOptions(): ToolOptionsUI {
     const { editor, options: o } = this;
-    const preview = h('span', { class: 'gradient-preview', title: 'Náhled přechodu' });
+    const preview = h('span', { class: 'gradient-preview', title: 'Upravit přechod… (klik)' });
     const updatePreview = () => {
-      const stops = presetStops(o.preset, editor.settings.color, editor.settings.secondaryColor);
-      const css = (c: RGBA) => `rgba(${c.r},${c.g},${c.b},${c.a / 255})`;
-      const [a, b] = o.reverse ? [stops[1], stops[0]] : [stops[0], stops[1]];
-      preview.style.background = `linear-gradient(to right, ${css(a.color)}, ${css(b.color)}), repeating-conic-gradient(#bbb 0 25%, #fff 0 50%) 0 0 / 8px 8px`;
+      const def = this.gradient();
+      preview.style.background = `${gradientCss(o.reverse ? reverseGradient(def) : def)}, repeating-conic-gradient(#bbb 0 25%, #fff 0 50%) 0 0 / 8px 8px`;
     };
     updatePreview();
+    const presetSelect = selectField(null, GRADIENT_PRESETS, o.preset, (v) => {
+      o.preset = v as GradientPreset;
+      updatePreview();
+    });
+    preview.addEventListener('click', () => {
+      void this.editGradient().then((ok) => {
+        if (!ok) return;
+        const select = presetSelect.querySelector('select') ?? (presetSelect as unknown as HTMLSelectElement);
+        select.value = 'custom';
+        updatePreview();
+      });
+    });
     const unsubscribe = editor.on('settings', updatePreview);
     return {
       element: h(
         'div',
         { class: 'tool-options' },
         preview,
-        selectField(null, GRADIENT_PRESETS, o.preset, (v) => {
-          o.preset = v as GradientPreset;
-          updatePreview();
-        }),
+        presetSelect,
         selectField(null, GRADIENT_TYPES, o.type, (v) => (o.type = v as GradientType)),
         blendModeSelect(o.blendMode, (v) => (o.blendMode = v)),
         opacitySlider(o.opacity, (v) => (o.opacity = v)),

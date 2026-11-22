@@ -148,6 +148,8 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
 
   /** Oznámí změnu pixelů vrstvy (překreslení, náhledy). */
   notifyPixels(layerId: string, rect?: Rect): void {
+    const layer = this.getLayer(layerId);
+    if (layer) layer.pixelVersion++;
     this.changed({ kind: 'pixels', layerId, rect });
   }
 

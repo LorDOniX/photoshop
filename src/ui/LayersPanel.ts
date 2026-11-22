@@ -1,5 +1,7 @@
 import { Brush, ChevronDown, CornerLeftDown, ChevronRight, Contrast, Eye, FilePlus, Folder, FolderOpen, Grid2x2, Link2, Lock, Move, SquareDot, Trash2 } from 'lucide';
+import { ADJUSTMENT_NAMES, LAYER_ADJUSTMENT_KINDS } from '../core/adjust';
 import type { Editor } from '../core/Editor';
+import { hasActiveEffects } from '../core/effects';
 import { clippingBase, depthOf, isClippingBase, type DropPosition } from '../core/groups';
 import { BLEND_MODES, LOCK_KINDS, type BlendMode, type Layer, type LayerProps, type LockKind } from '../core/Layer';
 import { drawMaskPreview } from '../core/mask';
@@ -22,6 +24,8 @@ export class LayersPanel {
   private readonly dirtyThumbs = new Set<string>();
   /** Krytí vybraných vrstev před tažením posuvníku. */
   private opacityBefore: Map<string, Partial<LayerProps>> | null = null;
+  private readonly fill: SliderField;
+  private fillBefore: Map<string, Partial<LayerProps>> | null = null;
   private dragId: string | null = null;
   /** Id zobrazených řádků shora dolů (pro výběr rozsahu se Shift). */
   private rowOrder: string[] = [];
@@ -80,7 +84,30 @@ export class LayersPanel {
       },
     });
 
+    // Krytí výplně (styly vrstvy zůstanou) – jen vrstvy, ne skupiny.
+    this.fill = new SliderField({
+      label: 'Výplň:',
+      value: 100,
+      min: 0,
+      max: 100,
+      unit: '%',
+      onInput: (v) => {
+        const layers = editor.selectedRoots().filter((l) => !l.isGroup);
+        if (!layers.length) return;
+        this.fillBefore ??= new Map(layers.map((l) => [l.id, { fillOpacity: l.fillOpacity }]));
+        for (const l of layers) editor.doc.updateLayer(l.id, { fillOpacity: v / 100 });
+      },
+      onCommit: () => {
+        if (this.fillBefore) editor.commitSelectionProps(this.fillBefore, 'Krytí výplně');
+        this.fillBefore = null;
+      },
+    });
+
     this.list = h('div', { class: 'layer-list' });
+    // S Alt nad vrstvou ukazuje kurzor, že klik vytvoří / uvolní ořezovou masku.
+    const altHint = (e: MouseEvent) => this.list.classList.toggle('alt-clip', e.altKey);
+    this.list.addEventListener('mousemove', altHint);
+    this.list.addEventListener('mouseleave', () => this.list.classList.remove('alt-clip'));
 
     const run = (action: string) => () => editor.actions.run(action);
     const todo = (title: string) => `${title} – připravujeme`;
@@ -95,18 +122,32 @@ export class LayersPanel {
         h('span', { class: 'muted' }, 'Zámek:'),
         ...this.lockButtons.map((b) => b.button),
         h('span', { class: 'flex-spacer' }),
-        new SliderField({ label: 'Výplň:', value: 100, min: 0, max: 100, unit: '%' }).element,
+        this.fill.element,
       ),
       this.list,
       h(
         'footer',
         { class: 'panel-footer' },
         iconButton(Link2, todo('Propojit vrstvy')),
-        h('button', { class: 'icon-btn fx-btn', type: 'button', title: todo('Styly vrstvy') }, 'eff'),
+        h('button', { class: 'icon-btn fx-btn', type: 'button', title: 'Styl vrstvy (stín, záře, tah, překrytí…)', onClick: () => editor.actions.run('layer.style') }, 'eff'),
         iconButton(SquareDot, 'Přidat masku vrstvy (z výběru, je-li nějaký; Alt = skrýt)', (e) =>
           editor.actions.run(editor.doc.selection ? (e.altKey ? 'mask.hideSelection' : 'mask.revealSelection') : e.altKey ? 'mask.hideAll' : 'mask.revealAll'),
         ),
-        iconButton(Contrast, todo('Nová vrstva úprav')),
+        iconButton(Contrast, 'Nová výplňová vrstva / vrstva úprav', (e) => {
+          const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+          showContextMenu(
+            editor.actions,
+            [
+              'layer.newFill.color',
+              'layer.newFill.gradient',
+              'layer.newFill.pattern',
+              '-',
+              ...LAYER_ADJUSTMENT_KINDS.map((k) => `layer.newAdjustment.${k}`),
+            ],
+            r.left,
+            r.bottom + 2,
+          );
+        }),
         iconButton(Folder, 'Nová skupina', run('layer.newGroup')),
         iconButton(FilePlus, 'Nová vrstva', run('layer.new')),
         iconButton(Trash2, 'Smazat vrstvu', run('layer.delete')),
@@ -134,6 +175,8 @@ export class LayersPanel {
     this.blend.disabled = !active;
     this.opacity.setValue(Math.round((active?.opacity ?? 1) * 100));
     this.opacity.disabled = !active;
+    this.fill.setValue(Math.round((active && !active.isGroup ? active.fillOpacity : 1) * 100));
+    this.fill.disabled = !active || active.isGroup;
     for (const { button, kinds } of this.lockButtons) {
       button.classList.toggle('active', !!active && kinds.every((k) => active[k]));
       button.disabled = !active;
@@ -179,11 +222,16 @@ export class LayersPanel {
       editor.doc.setActive(layer.id);
       editor.setMaskTarget(false);
     });
-    if (layer.text) {
-      thumb.title = 'Textová vrstva – dvojklik = upravit text';
+    if (layer.text || layer.fill || layer.adjustment) {
+      thumb.title = layer.text
+        ? 'Textová vrstva – dvojklik = upravit text'
+        : layer.fill
+          ? 'Výplňová vrstva – dvojklik = upravit výplň'
+          : `Vrstva úprav (${ADJUSTMENT_NAMES[layer.adjustment!.kind]}) – dvojklik = nastavení`;
       thumb.addEventListener('dblclick', (e) => {
         e.stopPropagation();
-        editor.actions.run('text.edit');
+        editor.doc.setActive(layer.id);
+        editor.actions.run(layer.text ? 'text.edit' : 'layer.editContent');
       });
     }
     this.thumbs.set(layer.id, thumb);
@@ -254,6 +302,21 @@ export class LayersPanel {
       maskThumb,
       name,
       layer.opacity < 1 ? h('span', { class: 'badge' }, `${Math.round(layer.opacity * 100)} %`) : null,
+      hasActiveEffects(layer.effects)
+        ? h(
+            'span',
+            {
+              class: 'fx-badge',
+              title: 'Styl vrstvy – klik upraví',
+              onClick: (e: MouseEvent) => {
+                e.stopPropagation();
+                editor.doc.setActive(layer.id);
+                editor.actions.run('layer.style');
+              },
+            },
+            'fx',
+          )
+        : null,
       this.lockBadge(layer),
     );
 
@@ -336,6 +399,8 @@ export class LayersPanel {
    */
   private selectRow(id: string, e: MouseEvent): void {
     const doc = this.editor.doc;
+    // Alt+klik (jako ve Photoshopu na hranici vrstev) = ořezová maska do vrstvy pod ní.
+    if (e.altKey && !e.ctrlKey && !e.metaKey && !e.shiftKey && this.editor.toggleClippingOf(id)) return;
     const active = doc.activeLayerId;
     if ((e.ctrlKey || e.metaKey) && active) {
       const ids = doc.selectedLayerIds;
@@ -483,6 +548,29 @@ export class LayersPanel {
   private drawThumb(layer: Layer, thumb: HTMLCanvasElement): void {
     const ctx = thumb.getContext('2d');
     if (!ctx) return;
+    if (layer.adjustment) {
+      // Ikona vrstvy úprav: půlkruh černá / bílá.
+      const tw = THUMB_W * THUMB_SCALE;
+      const th = THUMB_H * THUMB_SCALE;
+      const r = th * 0.36;
+      ctx.clearRect(0, 0, tw, th);
+      ctx.fillStyle = '#d9d9d9';
+      ctx.fillRect(tw / 2 - th / 2, 0, th, th);
+      ctx.beginPath();
+      ctx.arc(tw / 2, th / 2, r, Math.PI / 2, (Math.PI * 3) / 2);
+      ctx.fillStyle = '#222';
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(tw / 2, th / 2, r, -Math.PI / 2, Math.PI / 2);
+      ctx.fillStyle = '#fff';
+      ctx.fill();
+      ctx.lineWidth = THUMB_SCALE;
+      ctx.strokeStyle = '#222';
+      ctx.beginPath();
+      ctx.arc(tw / 2, th / 2, r, 0, Math.PI * 2);
+      ctx.stroke();
+      return;
+    }
     if (layer.text) {
       const tw = THUMB_W * THUMB_SCALE;
       const th = THUMB_H * THUMB_SCALE;

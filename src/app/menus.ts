@@ -1,3 +1,5 @@
+import { LAYER_KINDS } from './adjustments';
+import { FILTER_MENU } from './filters';
 import { placeholderAction, type ActionRegistry } from '../core/actions';
 import type { MenuDef } from '../ui/MenuBar';
 import type { MenuItem } from '../ui/Menu';
@@ -27,9 +29,23 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
   const sub = (label: string, items: MenuItem[]): MenuItem => ({ label, items });
   const todoSub = (label: string, labels: string[]): MenuItem => sub(label, labels.map((l) => (l === '-' ? l : todo(l))));
 
-  const adjustments = [
-    'Jas/kontrast…', 'Úrovně…', 'Křivky…', 'Expozice…', 'Živost…', 'Odstín/sytost…', 'Vyvážení barev…',
-    'Černobílý…', 'Fotofiltr…', '-', 'Invertovat', 'Posterizace…', 'Práh…', 'Mapa přechodu…', '-', 'Odbarvit',
+  const adjustmentIds = [
+    'adjust.brightnessContrast',
+    'adjust.levels',
+    'adjust.curves',
+    'adjust.exposure',
+    'adjust.vibrance',
+    'adjust.hueSaturation',
+    'adjust.colorBalance',
+    'adjust.blackWhite',
+    'adjust.photoFilter',
+    '-',
+    'adjust.invert',
+    'adjust.posterize',
+    'adjust.threshold',
+    'adjust.gradientMap',
+    '-',
+    'adjust.desaturate',
   ];
 
   const file: MenuItem[] = [
@@ -39,7 +55,7 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     todoSub('Otevřít další', ['Otevřít z URL…', 'Nedávné soubory']),
     '-',
     'file.save',
-    todo('Uložit jako PSD'),
+    'file.savePsd',
     sub('Exportovat jako', ['file.exportPng', 'file.exportJpeg', 'file.exportWebp', todo('PDF'), todo('SVG'), todo('GIF')]),
     todo('Tisk…', 'Ctrl+P'),
     '-',
@@ -54,7 +70,7 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
   const edit: MenuItem[] = [
     'edit.redo',
     'edit.undo',
-    todo('Zeslabit…', 'Ctrl+Shift+F'),
+    'edit.fade',
     '-',
     'edit.cut',
     'edit.copy',
@@ -64,7 +80,10 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     '-',
     'edit.fillFg',
     'edit.fillBg',
+    'edit.fillPattern',
     'edit.stroke',
+    '-',
+    'edit.definePattern',
     '-',
     'edit.freeTransform',
     sub('Transformovat', [
@@ -80,18 +99,18 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
       'transform.flipV',
     ]),
     '-',
-    todoSub('Definovat', ['Vzorek', 'Štětec', 'Vlastní tvar']),
+    sub('Definovat', ['edit.definePattern', todo('Štětec'), todo('Vlastní tvar')]),
     '-',
     'edit.preferences',
   ];
 
   const image: MenuItem[] = [
     todoSub('Režim', ['RGB', '-', '8 bitů/kanál', '16 bitů/kanál', '32 bitů/kanál']),
-    todoSub('Úpravy', adjustments),
+    sub('Úpravy', adjustmentIds),
     '-',
-    todo('Automatický tón'),
-    todo('Automatický kontrast'),
-    todo('Automatické barvy'),
+    'adjust.autoTone',
+    'adjust.autoContrast',
+    'adjust.autoColor',
     '-',
     'image.canvasSize',
     'image.size',
@@ -108,9 +127,29 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     'layer.duplicate',
     'layer.delete',
     '-',
-    todoSub('Styl vrstvy', ['Možnosti prolnutí…', '-', 'Vržený stín…', 'Vnitřní stín…', 'Vnější záře…', 'Vnitřní záře…', 'Úkos a reliéf…', 'Překrytí barvou…', 'Překrytí přechodem…', 'Obrys…', '-', 'Vymazat styl vrstvy']),
-    todoSub('Nová výplňová vrstva', ['Barva…', 'Přechod…', 'Vzorek…']),
-    todoSub('Nová vrstva úprav', adjustments.filter((a) => a !== 'Odbarvit')),
+    sub('Styl vrstvy', [
+      'layer.style',
+      '-',
+      'layer.style.bevel',
+      'layer.style.stroke',
+      'layer.style.innerShadow',
+      'layer.style.innerGlow',
+      'layer.style.satin',
+      'layer.style.colorOverlay',
+      'layer.style.gradientOverlay',
+      'layer.style.patternOverlay',
+      'layer.style.outerGlow',
+      'layer.style.dropShadow',
+      '-',
+      'layer.clearStyle',
+    ]),
+    sub('Nová výplňová vrstva', ['layer.newFill.color', 'layer.newFill.gradient', 'layer.newFill.pattern']),
+    sub('Nová vrstva úprav', [
+      ...LAYER_KINDS.slice(0, 9).map((k) => `layer.newAdjustment.${k}`),
+      '-',
+      ...LAYER_KINDS.slice(9).map((k) => `layer.newAdjustment.${k}`),
+    ]),
+    'layer.editContent',
     '-',
     sub('Rastrová maska', [
       'mask.revealAll',
@@ -167,15 +206,7 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     todo('Uložit výběr'),
   ];
 
-  // Filtry nejsou v plánu – menu je jen kvůli rozložení jako ve Photopea.
-  const filter: MenuItem[] = [
-    todo('Poslední filtr', 'Ctrl+Alt+F'),
-    '-',
-    todoSub('Rozostření', ['Průměr', 'Gaussovské rozostření…', 'Rozostření pohybem…', 'Radiální rozostření…']),
-    todoSub('Šum', ['Přidat šum…', 'Odstranit skvrny', 'Medián…']),
-    todoSub('Zostření', ['Zostřit', 'Doostřit…', 'Maska rozostření…']),
-    todoSub('Jiné', ['Horní propust…', 'Posun…', 'Barva na alfu…']),
-  ];
+  const filter: MenuItem[] = ['filter.last', '-', ...FILTER_MENU.map(([label, kinds]) => sub(label, kinds.map((k) => `filter.${k}`)))];
 
   const view: MenuItem[] = [
     'view.zoomIn',
@@ -233,7 +264,8 @@ export function buildMenus(actions: ActionRegistry): AppMenus {
     'layer.rasterize',
     '-',
     'layer.clippingMask',
-    todo('Styl vrstvy'),
+    'layer.style',
+    'layer.clearStyle',
     '-',
     sub('Rastrová maska', ['mask.revealAll', 'mask.hideAll', 'mask.revealSelection', 'mask.hideSelection', '-', 'mask.delete', 'mask.apply']),
     '-',

@@ -2,15 +2,12 @@ import {
   AlignCenter,
   AlignLeft,
   AlignRight,
-  Bandage,
   Circle,
   Contrast,
   Crosshair,
   Droplet,
-  Eraser,
   Eye,
   Frame,
-  Highlighter,
   Minus,
   MousePointer2,
   PenLine,
@@ -29,7 +26,6 @@ import {
   SprayCan,
   Square,
   SquareDashedMousePointer,
-  Stamp,
   Sun,
   Moon,
   Triangle,
@@ -41,7 +37,7 @@ import {
 import { checkbox, iconButton, segmented, selectField, separator, SliderField, textButton, textField } from '../ui/controls';
 import { h } from '../ui/dom';
 import type { IconNode } from '../ui/icons';
-import { PAINT_BLEND_MODES, pressureToggles, ratioFields, SAMPLE_SOURCES, selectionModes, sizeFields, slider } from './optionParts';
+import { pressureToggles, ratioFields, selectionModes, sizeFields, slider } from './optionParts';
 import type { Tool, ToolOptionsUI } from './Tool';
 
 /** Nástroj, který je zatím jen připravený v UI – dá se vybrat a zobrazí volby, ale nic nedělá. */
@@ -70,9 +66,6 @@ const sliceOptions = () => [selectField('Styl:', ['Normální', 'Pevný poměr',
 
 const brushPreset = () => slider('Štětec:', 20, 500, ' px', 1);
 
-const healingOptions = () => [brushPreset(), selectField('Zdroj:', SAMPLE_SOURCES), ...pressureToggles(), checkbox('Retušovat výběr')];
-
-const patchOptions = () => [selectionModes(), separator(), selectField('Záplata:', ['Zdroj', 'Cíl']), checkbox('Průhledné')];
 
 const colorReplaceOptions = () => [
   brushPreset(),
@@ -81,18 +74,6 @@ const colorReplaceOptions = () => [
   slider('Tolerance:', 30),
   checkbox('Vyhlazování', true),
 ];
-
-const cloneOptions = () => [
-  brushPreset(),
-  selectField('Režim prolnutí:', PAINT_BLEND_MODES),
-  slider('Krytí:', 100),
-  checkbox('Zarovnané', true),
-  selectField('Zdroj:', SAMPLE_SOURCES),
-  textButton('Vybrat zdroj'),
-  ...pressureToggles(),
-];
-
-const bgEraserOptions = () => [brushPreset(), slider('Tolerance:', 50), selectField('Omezení:', ['Souvislé', 'Nesouvislé']), checkbox('Chránit barvu popředí')];
 
 const strengthOptions = () => [brushPreset(), slider('Síla:', 50), checkbox('Ze všech vrstev'), ...pressureToggles()];
 
@@ -168,13 +149,8 @@ export function createPlaceholderTools(): Tool[] {
     t('slice-select', 'Výběr řezu', Pointer, 'C', () => [textButton('Rozdělit…')]),
     t('color-sampler', 'Vzorkovač barev', Crosshair, 'I', () => [selectField('Velikost vzorku:', ['1 × 1', '3 × 3', '5 × 5']), textButton('Vymazat vše')]),
     t('ruler', 'Pravítko', Ruler, 'I', () => [textField('X:', '0', 40), textField('Y:', '0', 40), textField('Š:', '0', 40), textField('V:', '0', 40), textField('Ú:', '0°', 40), textButton('Narovnat vrstvu'), textButton('Vymazat')]),
-    t('spot-healing', 'Bodový retušovací štětec', Bandage, 'J', healingOptions),
-    t('healing', 'Retušovací štětec', Highlighter, 'J', healingOptions),
-    t('patch', 'Záplata', Shapes, 'J', patchOptions),
     t('red-eye', 'Červené oči', ScanEye, 'J', () => [slider('Velikost zornice:', 50), slider('Ztmavení:', 50)]),
     t('color-replace', 'Nahrazení barvy', Replace, 'B', colorReplaceOptions),
-    t('stamp', 'Razítko', Stamp, 'S', cloneOptions),
-    t('bg-eraser', 'Guma pozadí', Eraser, 'E', bgEraserOptions),
     t('blur', 'Rozostření', Droplet, undefined, strengthOptions),
     t('sharpen', 'Zostření', Triangle, undefined, strengthOptions),
     t('smudge', 'Rozmazání', Waves, undefined, strengthOptions),

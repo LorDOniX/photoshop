@@ -136,25 +136,175 @@ export function snapAngle(start: Point, end: Point): Point {
   return { x: start.x + Math.cos(a) * len, y: start.y + Math.sin(a) * len };
 }
 
-export type GradientPreset = 'fg-bg' | 'fg-transparent' | 'black-white';
+/**
+ * Přechod jako ve Photoshopu: barevné zastávky a zvlášť zastávky krytí (obojí poloha 0..1). Mezi zastávkami
+ * se lineárně interpoluje, před první / za poslední platí krajní hodnota.
+ */
+export interface GradientDef {
+  colors: Array<{ pos: number; color: string }>;
+  alphas: Array<{ pos: number; opacity: number }>;
+}
+
+const byPos = <T extends { pos: number }>(a: readonly T[]) => [...a].sort((x, y) => x.pos - y.pos);
+
+function interpolate<T extends { pos: number }>(stops: readonly T[], t: number, value: (s: T) => number[]): number[] {
+  const s = byPos(stops);
+  if (!s.length) return [];
+  if (t <= s[0].pos) return value(s[0]);
+  for (let i = 1; i < s.length; i++) {
+    if (t <= s[i].pos) {
+      const a = s[i - 1];
+      const b = s[i];
+      const f = b.pos > a.pos ? (t - a.pos) / (b.pos - a.pos) : 1;
+      const va = value(a);
+      const vb = value(b);
+      return va.map((v, k) => v + (vb[k] - v) * f);
+    }
+  }
+  return value(s[s.length - 1]);
+}
+
+/** Barva a krytí přechodu v poloze t (0..1). */
+export function sampleGradient(def: GradientDef, t: number): RGBA {
+  const rgb = def.colors.length ? interpolate(def.colors, t, (c) => { const x = parseHex(c.color); return [x.r, x.g, x.b]; }) : [0, 0, 0];
+  const [o] = def.alphas.length ? interpolate(def.alphas, t, (a) => [a.opacity]) : [1];
+  return { r: rgb[0], g: rgb[1], b: rgb[2], a: o * 255 };
+}
+
+/** Zastávky RGBA pro `buildLut` / canvas: sjednocení poloh barevných zastávek a zastávek krytí (přesné). */
+export function gradientStops(def: GradientDef): GradientStop[] {
+  const positions = [...new Set([0, 1, ...def.colors.map((c) => c.pos), ...def.alphas.map((a) => a.pos)])].sort((a, b) => a - b);
+  return positions.map((pos) => ({ pos, color: sampleGradient(def, pos) }));
+}
+
+/** Dvoubarevný neprůhledný přechod. */
+export function twoColorGradient(from: string, to: string): GradientDef {
+  return {
+    colors: [
+      { pos: 0, color: from },
+      { pos: 1, color: to },
+    ],
+    alphas: [
+      { pos: 0, opacity: 1 },
+      { pos: 1, opacity: 1 },
+    ],
+  };
+}
+
+/** Obrácený přechod (zrcadlení poloh). */
+export function reverseGradient(def: GradientDef): GradientDef {
+  return {
+    colors: byPos(def.colors.map((c) => ({ ...c, pos: 1 - c.pos }))),
+    alphas: byPos(def.alphas.map((a) => ({ ...a, pos: 1 - a.pos }))),
+  };
+}
+
+/** CSS `linear-gradient` zleva doprava (náhledy v UI; pod něj patří šachovnice). */
+export function gradientCss(def: GradientDef): string {
+  const parts = gradientStops(def).map((s) => `rgba(${Math.round(s.color.r)},${Math.round(s.color.g)},${Math.round(s.color.b)},${(s.color.a / 255).toFixed(3)}) ${(s.pos * 100).toFixed(2)}%`);
+  return `linear-gradient(to right, ${parts.join(', ')})`;
+}
+
+/** Knihovna přechodů editoru (barvy popředí / pozadí se doplní při použití). */
+export const GRADIENT_LIBRARY: ReadonlyArray<{ name: string; def: GradientDef | 'fg-bg' | 'fg-transparent' }> = [
+  { name: 'Popředí → pozadí', def: 'fg-bg' },
+  { name: 'Popředí → průhledná', def: 'fg-transparent' },
+  { name: 'Černá → bílá', def: twoColorGradient('#000000', '#ffffff') },
+  {
+    name: 'Spektrum',
+    def: {
+      colors: ['#ff0000', '#ffff00', '#00ff00', '#00ffff', '#0000ff', '#ff00ff', '#ff0000'].map((color, i) => ({ pos: i / 6, color })),
+      alphas: [
+        { pos: 0, opacity: 1 },
+        { pos: 1, opacity: 1 },
+      ],
+    },
+  },
+  {
+    name: 'Měď',
+    def: {
+      colors: [
+        { pos: 0, color: '#97461a' },
+        { pos: 0.3, color: '#fbd8c5' },
+        { pos: 0.65, color: '#6c2e16' },
+        { pos: 1, color: '#efdbcd' },
+      ],
+      alphas: [
+        { pos: 0, opacity: 1 },
+        { pos: 1, opacity: 1 },
+      ],
+    },
+  },
+  {
+    name: 'Chrom',
+    def: {
+      colors: [
+        { pos: 0, color: '#29868c' },
+        { pos: 0.45, color: '#ffffff' },
+        { pos: 0.5, color: '#4a3017' },
+        { pos: 0.6, color: '#d1913d' },
+        { pos: 1, color: '#ffffff' },
+      ],
+      alphas: [
+        { pos: 0, opacity: 1 },
+        { pos: 1, opacity: 1 },
+      ],
+    },
+  },
+  {
+    name: 'Západ slunce',
+    def: {
+      colors: [
+        { pos: 0, color: '#2a0a4a' },
+        { pos: 0.55, color: '#e8445a' },
+        { pos: 1, color: '#ffcc66' },
+      ],
+      alphas: [
+        { pos: 0, opacity: 1 },
+        { pos: 1, opacity: 1 },
+      ],
+    },
+  },
+  {
+    name: 'Průhledné pruhy',
+    def: {
+      colors: [
+        { pos: 0, color: '#000000' },
+        { pos: 1, color: '#000000' },
+      ],
+      alphas: [0, 0.2, 0.2001, 0.4, 0.4001, 0.6, 0.6001, 0.8, 0.8001, 1].map((pos, i) => ({ pos, opacity: Math.floor((i + 1) / 2) % 2 ? 0 : 1 })),
+    },
+  },
+];
+
+/** Položka knihovny → přechod s doplněnými barvami popředí / pozadí. */
+export function libraryGradient(def: GradientDef | 'fg-bg' | 'fg-transparent', fg: string, bg: string): GradientDef {
+  if (def === 'fg-bg') return twoColorGradient(fg, bg);
+  if (def === 'fg-transparent') {
+    const g = twoColorGradient(fg, fg);
+    g.alphas[1].opacity = 0;
+    return g;
+  }
+  return structuredClone(def);
+}
+
+export type GradientPreset = 'fg-bg' | 'fg-transparent' | 'black-white' | 'custom';
 
 export const GRADIENT_PRESETS: ReadonlyArray<{ value: GradientPreset; label: string }> = [
   { value: 'fg-bg', label: 'Popředí → pozadí' },
   { value: 'fg-transparent', label: 'Popředí → průhledná' },
   { value: 'black-white', label: 'Černá → bílá' },
+  { value: 'custom', label: 'Vlastní' },
 ];
 
+/** Přechod podle předvolby nástroje a aktuálních barev popředí / pozadí. */
+export function presetGradient(preset: GradientPreset, fg: string, bg: string, custom: GradientDef): GradientDef {
+  if (preset === 'custom') return structuredClone(custom);
+  if (preset === 'black-white') return twoColorGradient('#000000', '#ffffff');
+  return libraryGradient(preset, fg, bg);
+}
+
 /** Barevné body přechodu podle předvolby a aktuálních barev popředí / pozadí. */
-export function presetStops(preset: GradientPreset, fg: string, bg: string): GradientStop[] {
-  const f = parseHex(fg);
-  const colors: Record<GradientPreset, [RGBA, RGBA]> = {
-    'fg-bg': [f, parseHex(bg)],
-    'fg-transparent': [f, { ...f, a: 0 }],
-    'black-white': [parseHex('#000000'), parseHex('#ffffff')],
-  };
-  const [a, b] = colors[preset];
-  return [
-    { pos: 0, color: a },
-    { pos: 1, color: b },
-  ];
+export function presetStops(preset: Exclude<GradientPreset, 'custom'>, fg: string, bg: string): GradientStop[] {
+  return gradientStops(presetGradient(preset, fg, bg, twoColorGradient(fg, bg)));
 }

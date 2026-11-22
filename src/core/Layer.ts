@@ -1,4 +1,7 @@
+import type { Adjustment } from './adjust';
+import { getFillData, setFillData, type FillContent } from './fillLayer';
 import { cloneCanvas, createCanvas, get2d } from './canvas';
+import type { LayerEffects } from './effects';
 import { createId } from './id';
 import { getTextData, setTextData, type TextData } from './text';
 
@@ -45,6 +48,11 @@ export interface LayerProps {
   visible: boolean;
   /** 0..1 */
   opacity: number;
+  /**
+   * Krytí výplně 0..1 (Výplň v panelu): ovlivní obsah a vnitřní styly (překrytí, vnitřní stín a záře),
+   * ne stín, vnější záři a tah – s výplní 0 zůstanou vidět jen styly.
+   */
+  fillOpacity: number;
   blendMode: BlendMode;
   /** Posun vrstvy v souřadnicích dokumentu. */
   x: number;
@@ -57,6 +65,13 @@ export interface LayerProps {
   lockPosition: boolean;
   /** Ořezová maska: vrstva je vidět jen v pixelech základní vrstvy pod ní (viz core/groups.ts clippingBase). */
   clipped: boolean;
+  /** Styly vrstvy (stín, záře, tah, překrytí barvou); null = žádné. Viz core/effects.ts. */
+  effects: LayerEffects | null;
+  /**
+   * Vrstva úprav: úprava všeho pod vrstvou (krytí a maska = síla); vlastní pixely nemá. Viz core/adjust.ts
+   * a render/composite.ts.
+   */
+  adjustment: Adjustment | null;
 }
 
 export type LockKind = 'lockTransparency' | 'lockPixels' | 'lockPosition';
@@ -81,6 +96,7 @@ export class Layer implements LayerProps {
   name = 'Vrstva';
   visible = true;
   opacity = 1;
+  fillOpacity = 1;
   blendMode: BlendMode = 'source-over';
   x = 0;
   y = 0;
@@ -89,6 +105,10 @@ export class Layer implements LayerProps {
   lockPixels = false;
   lockPosition = false;
   clipped = false;
+  effects: LayerEffects | null = null;
+  adjustment: Adjustment | null = null;
+  /** Počítadlo změn pixelů (ImageDocument.notifyPixels) – cache efektů pozná, že je má přepočítat. */
+  pixelVersion = 0;
   canvas: HTMLCanvasElement;
   ctx: CanvasRenderingContext2D;
   /**
@@ -127,14 +147,19 @@ export class Layer implements LayerProps {
     return getTextData(this.canvas);
   }
 
+  /** Data výplňové vrstvy (vázaná na aktuální plátno – viz core/fillLayer.ts). */
+  get fill(): FillContent | null {
+    return getFillData(this.canvas);
+  }
+
   /** Maska existuje a je zapnutá. */
   get hasActiveMask(): boolean {
     return this.mask !== null && this.maskEnabled;
   }
 
   getProps(): LayerProps {
-    const { name, visible, opacity, blendMode, x, y, maskEnabled, lockTransparency, lockPixels, lockPosition, clipped } = this;
-    return { name, visible, opacity, blendMode, x, y, maskEnabled, lockTransparency, lockPixels, lockPosition, clipped };
+    const { name, visible, opacity, fillOpacity, blendMode, x, y, maskEnabled, lockTransparency, lockPixels, lockPosition, clipped, effects, adjustment } = this;
+    return { name, visible, opacity, fillOpacity, blendMode, x, y, maskEnabled, lockTransparency, lockPixels, lockPosition, clipped, effects, adjustment };
   }
 
   setProps(props: Partial<LayerProps>): void {
@@ -148,6 +173,9 @@ export class Layer implements LayerProps {
     copy.ctx.drawImage(this.canvas, 0, 0);
     const text = this.text;
     if (text) setTextData(copy.canvas, text);
+    const fill = this.fill;
+    if (fill) setFillData(copy.canvas, fill);
+    if (this.adjustment) copy.adjustment = structuredClone(this.adjustment);
     if (this.mask) copy.mask = cloneCanvas(this.mask);
     return copy;
   }

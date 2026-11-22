@@ -1,7 +1,9 @@
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { createCanvas, get2d } from '../core/canvas';
+import { getPattern, isBuiltinPattern, patternCanvas, registerPattern } from '../core/patterns';
 import { ImageDocument } from '../core/ImageDocument';
 import { Layer, type LayerProps } from '../core/Layer';
+import { layerPatternIds, setFillData, type FillContent } from '../core/fillLayer';
 import { setTextData, type TextData } from '../core/text';
 import { canvasToBlob } from './files';
 
@@ -19,6 +21,8 @@ interface LayerManifest extends Omit<LayerProps, 'maskEnabled'> {
   mask?: { file: string; enabled: boolean };
   /** Od verze 3: textová vrstva (PNG obsahuje vykreslený text, takže ji otevře i starší verze jako rastr). */
   text?: TextData;
+  /** Výplňová vrstva (PNG obsahuje vykreslenou výplň). */
+  fill?: FillContent;
   /** Od verze 3: skupina (bez PNG, `file` je prázdný) a zařazení vrstvy do skupiny. */
   group?: { collapsed: boolean };
   parentId?: string | null;
@@ -32,11 +36,21 @@ interface ProjectManifest {
   activeLayerId: string | null;
   /** Odspodu nahoru. */
   layers: LayerManifest[];
+  /** Vzorky použité ve stylech vrstev (kromě vestavěných), aby projekt fungoval i bez knihovny. */
+  patterns?: Array<{ id: string; name: string; file: string }>;
 }
 
 /** Zámky vrstvy (starší projekty je nemají). */
-function locksOf(lm: Partial<LayerManifest>): Pick<LayerProps, 'lockTransparency' | 'lockPixels' | 'lockPosition' | 'clipped'> {
-  return { lockTransparency: !!lm.lockTransparency, lockPixels: !!lm.lockPixels, lockPosition: !!lm.lockPosition, clipped: !!lm.clipped };
+function locksOf(lm: Partial<LayerManifest>): Pick<LayerProps, 'lockTransparency' | 'lockPixels' | 'lockPosition' | 'clipped' | 'effects' | 'fillOpacity' | 'adjustment'> {
+  return {
+    lockTransparency: !!lm.lockTransparency,
+    lockPixels: !!lm.lockPixels,
+    lockPosition: !!lm.lockPosition,
+    clipped: !!lm.clipped,
+    effects: lm.effects ?? null,
+    fillOpacity: lm.fillOpacity ?? 1,
+    adjustment: lm.adjustment ?? null,
+  };
 }
 
 async function toPng(canvas: HTMLCanvasElement): Promise<Uint8Array> {
@@ -75,7 +89,17 @@ export async function saveProject(doc: ImageDocument): Promise<Blob> {
     }
     const text = layer.text;
     if (text) entry.text = text;
+    const fill = layer.fill;
+    if (fill) entry.fill = fill;
     layers.push(entry);
+  }
+  const patterns: NonNullable<ProjectManifest['patterns']> = [];
+  for (const id of new Set(doc.layers.flatMap(layerPatternIds))) {
+    const p = getPattern(id);
+    if (!p || isBuiltinPattern(id)) continue;
+    const file = `patterns/${patterns.length}.png`;
+    files[file] = await toPng(patternCanvas(p));
+    patterns.push({ id, name: p.name, file });
   }
   const manifest: ProjectManifest = {
     format: FORMAT,
@@ -84,6 +108,7 @@ export async function saveProject(doc: ImageDocument): Promise<Blob> {
     height: doc.height,
     activeLayerId: doc.activeLayerId,
     layers,
+    ...(patterns.length ? { patterns } : {}),
   };
   files['project.json'] = strToU8(JSON.stringify(manifest, null, 2));
   // PNG jsou už komprimované – ukládáme bez další komprese (rychlejší).
@@ -98,6 +123,17 @@ export async function loadProject(data: ArrayBuffer): Promise<ImageDocument> {
   const manifest = JSON.parse(strFromU8(json)) as ProjectManifest;
   if (manifest.format !== FORMAT) throw new Error('Neznámý formát projektu.');
   if (manifest.version > VERSION) throw new Error(`Projekt je z novější verze (${manifest.version}).`);
+
+  // Vzorky ze souboru – do registru, pokud ho ještě nezná (knihovna má přednost, obsah je stejný).
+  for (const pm of manifest.patterns ?? []) {
+    const bytes = files[pm.file];
+    if (!bytes || getPattern(pm.id)) continue;
+    const bitmap = await createImageBitmap(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'image/png' }), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    const c = createCanvas(bitmap.width, bitmap.height);
+    get2d(c).drawImage(bitmap, 0, 0);
+    bitmap.close();
+    registerPattern({ id: pm.id, name: pm.name, width: c.width, height: c.height, data: get2d(c).getImageData(0, 0, c.width, c.height).data });
+  }
 
   const doc = new ImageDocument(manifest.width, manifest.height);
   for (const lm of manifest.layers) {
@@ -114,6 +150,7 @@ export async function loadProject(data: ArrayBuffer): Promise<ImageDocument> {
     const layer = new Layer(lm.width, lm.height, { id, name, visible, opacity, blendMode, x, y, maskEnabled: lm.mask?.enabled ?? true, parentId: lm.parentId ?? null, ...locksOf(lm) });
     await fromPng(bytes, layer.canvas);
     if (lm.text) setTextData(layer.canvas, lm.text);
+    if (lm.fill) setFillData(layer.canvas, lm.fill);
     if (lm.mask) {
       const maskBytes = files[lm.mask.file];
       if (!maskBytes) throw new Error(`Chybí maska vrstvy ${lm.name}.`);

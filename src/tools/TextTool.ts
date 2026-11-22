@@ -130,6 +130,8 @@ export class TextTool implements Tool {
     editor.doc.setActive(id);
     editor.setMaskTarget(false);
     this.begin(layer, data, null, captureLayer(layer));
+    // Text z PSD (pixely z Photoshopu) se hned vykreslí editorem, aby kurzor seděl na písmenech.
+    if (data.origin) this.update({});
   }
 
   private begin(layer: Layer, data: TextData, add: AddLayerCommand | null, before: LayerState | null): void {
@@ -222,6 +224,13 @@ export class TextTool implements Tool {
       return;
     }
     if (s.layer.canvas === s.before.canvas) return;
+    // Beze změny textu i písma (jen otevřeno a zavřeno) se vrátí původní pixely – žádný krok historie.
+    const { origin: _o, ...now } = s.data;
+    const { origin: _p, ...was } = getTextData(s.before.canvas) ?? s.data;
+    if (JSON.stringify(now) === JSON.stringify(was)) {
+      doc.setLayerState(s.layer.id, s.before);
+      return;
+    }
     const cmds: Command[] = [new LayerStateCommand(doc, s.layer.id, s.before, captureLayer(s.layer), 'Upravit text')];
     // Název odvozený z textu se aktualizuje, ručně přejmenovaná vrstva si název nechá.
     const oldText = getTextData(s.before.canvas)?.content ?? null;
@@ -322,6 +331,8 @@ export class TextTool implements Tool {
 
     const sync = () => {
       const { data } = this.optionsSource();
+      // Písmo převzaté z PSD nemusí být v seznamu – doplní se.
+      if (![...family.options].some((o) => o.value === data.family)) family.add(new Option(data.family, data.family));
       family.value = data.family;
       style.value = data.style;
       size.setValue(Math.round(data.size));

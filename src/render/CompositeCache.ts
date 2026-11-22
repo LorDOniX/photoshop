@@ -1,4 +1,5 @@
 import { createCanvas, get2d, unionRect, type Rect } from '../core/canvas';
+import { effectPadding } from '../core/effects';
 import { buildTree, type TreeNode } from '../core/groups';
 import type { DocChange, ImageDocument } from '../core/ImageDocument';
 import type { Layer } from '../core/Layer';
@@ -27,7 +28,8 @@ interface Split {
 /** Skládá se uzel do okolí jen operací „přes“ (source-over)? */
 function overSafe(node: TreeNode<Layer>): boolean {
   const l = node.item;
-  if (!l.isGroup) return l.blendMode === 'source-over';
+  // Vrstva úprav mění všechno pod sebou – úsek s ní nejde předskládat zvlášť.
+  if (!l.isGroup) return l.blendMode === 'source-over' && !l.adjustment;
   // Průchozí skupina (100 %, Normální) skládá potomky přímo do okolí.
   if (l.opacity >= 1 && l.blendMode === 'source-over') return node.children.every(overSafe);
   return l.blendMode === 'source-over';
@@ -70,8 +72,12 @@ export class CompositeCache {
     if (c.kind === 'selection') return;
     if (c.kind === 'pixels' || c.kind === 'props') {
       if (this.split?.midIds.has(c.layerId)) {
-        if (c.kind === 'pixels' && c.rect && this.midDirty !== true) this.midDirty = unionRect(this.midDirty, c.rect);
-        else this.midDirty = true;
+        if (c.kind === 'pixels' && c.rect && this.midDirty !== true) {
+          // Stín / tah vrstvy sahá i mimo změněné pixely.
+          const pad = effectPadding(this.doc.getLayer(c.layerId)?.effects);
+          const r = c.rect;
+          this.midDirty = unionRect(this.midDirty, { x: r.x - pad, y: r.y - pad, width: r.width + pad * 2, height: r.height + pad * 2 });
+        } else this.midDirty = true;
         // Změna režimu prolnutí apod. se projeví v klíči struktury – update() pak rozdělení přepočítá.
         return;
       }
@@ -82,7 +88,7 @@ export class CompositeCache {
   /** Klíč struktury: pořadí, rodiče, aktivní vrstva a vlastnosti ovlivňující rozdělení. */
   private structureKey(): string {
     const d = this.doc;
-    return `${d.width}x${d.height}|${d.activeLayerId}|${d.layers.map((l) => `${l.id}:${l.parentId}:${l.clipped ? 1 : 0}:${l.blendMode}:${l.isGroup ? (l.opacity >= 1 ? 'g1' : 'g') : ''}`).join(',')}`;
+    return `${d.width}x${d.height}|${d.activeLayerId}|${d.layers.map((l) => `${l.id}:${l.parentId}:${l.clipped ? 1 : 0}:${l.blendMode}:${l.isGroup ? (l.opacity >= 1 ? 'g1' : 'g') : ''}${l.adjustment ? 'a' : ''}`).join(',')}`;
   }
 
   /** Rozdělí kořenové uzly na pod / střed / nad podle aktivní vrstvy. */

@@ -1,8 +1,15 @@
+import { adjustmentActions, editAdjustmentLayer } from './adjustments';
+import { editFillLayer, fillLayerActions } from './fillLayers';
+import { filterActions } from './filters';
+import { definePattern, fillWithPattern } from './patternActions';
 import type { Action } from '../core/actions';
 import type { Editor } from '../core/Editor';
 import { createBlankDocument } from '../core/ImageDocument';
 import { mergeDownTarget, visibleLayers } from '../core/merge';
+import { PSD_EXTENSION, savePsd } from '../io/psd';
 import { savePreferences } from './preferences';
+import { editLayerStyle } from './layerStyle';
+import { EFFECT_KINDS, EFFECT_NAMES, hasActiveEffects } from '../core/effects';
 
 const MB = 1024 * 1024;
 import type { StrokePosition } from '../core/paint/stroke';
@@ -98,7 +105,7 @@ export function registerActions(editor: Editor, app: AppContext): void {
       shortcuts: ['Ctrl+O'],
       run: async () => {
         // Každý soubor se otevře v nové záložce.
-        for (const file of await pickFiles(`image/*,${PROJECT_EXTENSION}`)) await app.openFile(file);
+        for (const file of await pickFiles(`image/*,${PROJECT_EXTENSION},${PSD_EXTENSION}`)) await app.openFile(file);
       },
     },
     {
@@ -117,6 +124,16 @@ export function registerActions(editor: Editor, app: AppContext): void {
       run: async () => {
         const session = editor.session;
         downloadBlob(await saveProject(session.doc), `${session.fileName}${PROJECT_EXTENSION}`);
+        editor.markSaved(session);
+      },
+    },
+    {
+      id: 'file.savePsd',
+      label: 'Uložit jako PSD',
+      shortcuts: ['Ctrl+Shift+S'],
+      run: async () => {
+        const session = editor.session;
+        downloadBlob(await savePsd(session.doc), `${session.fileName}${PSD_EXTENSION}`);
         editor.markSaved(session);
       },
     },
@@ -187,6 +204,17 @@ export function registerActions(editor: Editor, app: AppContext): void {
       shortcuts: ['Alt+Backspace', 'Alt+Delete'],
       run: () => editor.fillSelection(editor.settings.color, 'Vyplnit barvou popředí'),
       isEnabled: hasLayer,
+    },
+    {
+      id: 'edit.fillPattern',
+      label: 'Vyplnit vzorkem…',
+      run: () => void fillWithPattern(editor),
+      isEnabled: hasPixelLayer,
+    },
+    {
+      id: 'edit.definePattern',
+      label: 'Definovat vzorek…',
+      run: () => void definePattern(editor),
     },
     {
       id: 'edit.fillBg',
@@ -557,6 +585,26 @@ export function registerActions(editor: Editor, app: AppContext): void {
       isEnabled: hasLayer,
     },
 
+    // ---- Styly vrstvy ----
+    {
+      id: 'layer.style',
+      label: 'Styl vrstvy…',
+      run: () => void editLayerStyle(editor),
+      isEnabled: hasPixelLayer,
+    },
+    ...EFFECT_KINDS.map((k) => ({
+      id: `layer.style.${k}`,
+      label: `${EFFECT_NAMES[k]}…`,
+      run: () => void editLayerStyle(editor, k),
+      isEnabled: hasPixelLayer,
+    })),
+    {
+      id: 'layer.clearStyle',
+      label: 'Vymazat styl vrstvy',
+      run: () => editor.setSelectionProps({ effects: null }, 'Vymazat styl vrstvy'),
+      isEnabled: () => editor.selectedRoots().some((l) => hasActiveEffects(l.effects)),
+    },
+
     // ---- Skupiny ----
     { id: 'layer.newGroup', label: 'Skupina', run: () => editor.newGroup() },
     { id: 'layer.group', label: 'Seskupit vrstvy', shortcuts: ['Ctrl+G'], run: () => editor.groupActiveLayer(), isEnabled: hasLayer },
@@ -678,6 +726,27 @@ export function registerActions(editor: Editor, app: AppContext): void {
       run: () => editor.updateSettings({ brushSize: Math.min(500, Math.round(editor.settings.brushSize * 1.2) + 1) }),
     },
   );
+
+  // ---- Obraz → Úpravy ----
+  /** Vrstva s pixely, které jde trvale upravit (ne vrstva úprav). */
+  const canAdjust = () => hasPixelLayer() && !editor.doc.activeLayer!.adjustment;
+  editor.actions.register(...adjustmentActions(editor, canAdjust, () => true), ...fillLayerActions(editor, () => true));
+  editor.actions.register(...filterActions(editor));
+  editor.actions.register({
+    id: 'layer.editContent',
+    label: 'Upravit obsah vrstvy…',
+    isEnabled: () => {
+      const l = editor.doc.activeLayer;
+      return !!l && (!!l.adjustment || !!l.fill || !!l.text);
+    },
+    run: () => {
+      const l = editor.doc.activeLayer;
+      if (!l) return;
+      if (l.adjustment) return editAdjustmentLayer(editor, l);
+      if (l.fill) return editFillLayer(editor, l);
+      if (l.text) editor.actions.run('text.edit');
+    },
+  });
 
   // ---- Okno: panely v doku ----
   const panels: Array<[string, string]> = [

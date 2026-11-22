@@ -20,6 +20,11 @@ export interface TextData {
   align: TextAlign;
   /** Řádkování jako násobek velikosti písma. */
   lineHeight: number;
+  /**
+   * Text převzatý z PSD: pixely vykreslil Photoshop, `origin` je začátek účaří prvního řádku v dokumentu.
+   * Při první úpravě se text vykreslí editorem a umístí podle tohoto bodu (pak se `origin` zahodí).
+   */
+  origin?: { x: number; y: number };
 }
 
 export const FONT_FAMILIES = [
@@ -167,6 +172,13 @@ export function positionForClick(px: number, py: number, d: TextData, width: num
   // Účaří leží zhruba 0,3 velikosti písma pod středem řádku.
   const y = py - padY(d) - (d.size * d.lineHeight) / 2 - d.size * 0.3;
   return { x: Math.round(x), y: Math.round(y) };
+}
+
+/** Začátek účaří prvního řádku textové vrstvy v dokumentu (opak `positionForClick`; u zarovnání na střed / vpravo jeho střed / konec). */
+export function textOrigin(l: { x: number; y: number; width: number }, d: TextData): { x: number; y: number } {
+  const p = padX(d);
+  const x = d.align === 'left' ? l.x + p : d.align === 'right' ? l.x + l.width - p : l.x + l.width / 2;
+  return { x, y: l.y + padY(d) + (d.size * d.lineHeight) / 2 + d.size * 0.3 };
 }
 
 /** Výchozí název textové vrstvy = začátek prvního řádku. */

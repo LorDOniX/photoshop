@@ -1,4 +1,5 @@
 import type { Editor } from '../core/Editor';
+import { onPatternsChange } from '../core/patterns';
 import { Renderer } from '../render/Renderer';
 import type { ToolPointer } from '../tools/Tool';
 import { h } from './dom';
@@ -43,6 +44,11 @@ export class CanvasView {
       wrap,
     );
     this.renderer = new Renderer(this.canvas, editor);
+    // Vzorek načtený až po vykreslení (knihovna, otevřený soubor) – překreslit vrstvy s překrytím vzorkem.
+    onPatternsChange(() => {
+      this.renderer.invalidate();
+      editor.notifyView();
+    });
 
     let measured = false;
     new ResizeObserver(([entry]) => {

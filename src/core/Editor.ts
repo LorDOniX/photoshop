@@ -15,7 +15,7 @@ import { clipRect, cloneCanvas, createCanvas, get2d, unionRect, type Rect } from
 import { Emitter } from './Emitter';
 import { History, type Command } from './History';
 import { captureLayer, createBlankDocument, type DocChange, type DocState, type ImageDocument, type LayerState } from './ImageDocument';
-import { anchoredPosition, refitMask, renderText, type TextData } from './text';
+import { anchoredPosition, positionForClick, refitMask, renderText, type TextData } from './text';
 import { cropDocument, flipDocument, resizeCanvas, resizeImage, revealAllBounds, rotateDocument, trimBounds } from './imageOps';
 import type { Transform } from './transform/geometry';
 import { TransformSession } from './transform/session';
@@ -23,7 +23,10 @@ import { Layer, type LayerProps, type LockKind } from './Layer';
 import { restoreAlpha } from './paint/alpha';
 import { strokeMask, type StrokePosition } from './paint/stroke';
 import { alignOffsets, alphaBounds, distributeOffsets, type AlignKind, type DistributeAxis, type Offset } from './align';
-import { flatten, mergeDown, mergeVisible, type LayerList } from './merge';
+import { canvasPattern, getPattern } from './patterns';
+import type { Adjustment } from './adjust';
+import { renderFill, type FillContent } from './fillLayer';
+import { flatten, layerRectWithEffects, mergeDown, mergeVisible, type LayerList } from './merge';
 import {
   buildTree,
   findNode,
@@ -74,6 +77,8 @@ interface EditorEvents {
   selectionOptions: SelectionOptions;
   /** Přepnutí cíle úprav mezi pixely vrstvy a její maskou. */
   target: boolean;
+  /** Krátké upozornění pro uživatele (např. „nejdřív nastavte zdroj razítka“). */
+  notice: string;
 }
 
 /** Kam se kreslí: obrazové pixely aktivní vrstvy, nebo její maska. */
@@ -125,6 +130,8 @@ export class Editor extends Emitter<EditorEvents> {
   clipboard: { canvas: HTMLCanvasElement; x: number; y: number } | null = null;
   /** Úpravy jdou do masky aktivní vrstvy (klik na náhled masky). */
   maskTarget = false;
+  /** Poslední filtr / úprava, kterou jde zeslabit (Úpravy → Zeslabit), dokud je posledním krokem historie. */
+  fadeable: PaintCommand | null = null;
 
   private unsubscribeDoc: (() => void) | null = null;
   private untitledCounter = 0;
@@ -285,6 +292,11 @@ export class Editor extends Emitter<EditorEvents> {
   }
 
   /** Překreslení bez změny dokumentu (pohled, kurzor, overlay nástroje). */
+  /** Ukáže krátké upozornění (bublina u plátna). */
+  notice(message: string): void {
+    this.emit('notice', message);
+  }
+
   notifyView(): void {
     this.emit('view');
   }
@@ -309,6 +321,67 @@ export class Editor extends Emitter<EditorEvents> {
   addLayer(): void {
     const layer = new Layer(this.doc.width, this.doc.height, { name: this.nextLayerName() });
     this.execute(new AddLayerCommand(this.doc, layer, this.insertionIndex()));
+  }
+
+  /** Krok, který jde zeslabit – jen pokud je v historii poslední provedený. */
+  lastFadeable(): PaintCommand | null {
+    const cmd = this.fadeable;
+    return cmd && this.history.entries[this.history.position - 1] === cmd ? cmd : null;
+  }
+
+  /** Maska nové vrstvy úprav / výplně: z výběru, bez něj odkrýt vše (jako Photoshop). */
+  newLayerMask(): HTMLCanvasElement {
+    const sel = this.doc.selection;
+    if (sel) return cloneCanvas(maskToCanvas(sel));
+    const mask = createCanvas(this.doc.width, this.doc.height);
+    const ctx = get2d(mask);
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, mask.width, mask.height);
+    return mask;
+  }
+
+  /** Vytvoří vrstvu úprav (přes celé plátno, s maskou z výběru) nad aktivní vrstvou. */
+  createAdjustmentLayer(adjustment: Adjustment, name: string): Layer {
+    return new Layer(this.doc.width, this.doc.height, { name, adjustment: structuredClone(adjustment) });
+  }
+
+  /** Přidá hotovou vrstvu úprav / výplně (s maskou z výběru) jako krok historie; výběr se zruší. */
+  addSpecialLayer(layer: Layer, label: string): void {
+    layer.mask ??= this.newLayerMask();
+    const add = new AddLayerCommand(this.doc, layer, this.insertionIndex(), label);
+    const sel = this.doc.selection;
+    this.execute(sel ? new MacroCommand(label, [add, new SetSelectionCommand(this.doc, sel, null, 'Odznačit')]) : add);
+  }
+
+  /**
+   * Náhled nové vrstvy úprav / výplně během dialogu: vrstva se vloží bez historie; `commit` ji přidá
+   * jako krok historie (i se zrušením výběru), `cancel` ji odebere.
+   */
+  previewNewLayer(layer: Layer, label: string): { commit(): void; cancel(): void } {
+    layer.mask ??= this.newLayerMask();
+    const add = new AddLayerCommand(this.doc, layer, this.insertionIndex(), label);
+    add.do();
+    return {
+      commit: () => {
+        add.undo();
+        this.addSpecialLayer(layer, label);
+      },
+      cancel: () => add.undo(),
+    };
+  }
+
+  /** Výplňová vrstva přes celé plátno. */
+  createFillLayer(fill: FillContent, name: string): Layer {
+    const layer = new Layer(1, 1, { name });
+    layer.setCanvas(renderFill(fill, this.doc.width, this.doc.height));
+    return layer;
+  }
+
+  /** Změní nastavení výplňové vrstvy (vykreslí ji znovu). */
+  setFillContent(layer: Layer, fill: FillContent, label = 'Upravit výplň'): void {
+    const before = captureLayer(layer);
+    const canvas = renderFill(fill, layer.width, layer.height);
+    this.execute(new LayerStateCommand(this.doc, layer.id, before, { ...before, canvas }, label));
   }
 
   addImageLayer(image: CanvasImageSource & { width: number; height: number }, name: string): void {
@@ -537,6 +610,20 @@ export class Editor extends Emitter<EditorEvents> {
     if (cmds.length) this.execute(cmds.length === 1 ? cmds[0] : new MacroCommand(label, cmds));
   }
 
+  /**
+   * Alt+klik na vrstvu v panelu: ořízne jen tuto vrstvu do vrstvy pod ní, nebo ořezovou masku uvolní.
+   * Vrací false, když to nejde (skupina, pod vrstvou nic není).
+   */
+  toggleClippingOf(id: string): boolean {
+    const layer = this.doc.getLayer(id);
+    if (!layer || layer.isGroup) return false;
+    const below = this.doc.layers[this.doc.indexOf(id) - 1];
+    if (!layer.clipped && (!below || below.parentId !== layer.parentId || below.isGroup)) return false;
+    const on = !layer.clipped;
+    this.execute(new SetLayerPropsCommand(this.doc, id, { clipped: !on }, { clipped: on }, on ? 'Vytvořit ořezovou masku' : 'Uvolnit ořezovou masku'));
+    return true;
+  }
+
   /** Zámek vrstvy včetně zámků skupin, do kterých patří. */
   isLocked(layer: Layer, kind: LockKind): boolean {
     for (let l: Layer | null = layer, guard = 0; l && guard < 100; guard++) {
@@ -633,7 +720,7 @@ export class Editor extends Emitter<EditorEvents> {
     const leaves = inOrder.filter((l) => !l.isGroup);
     if (!leaves.length) return false;
     let rect: Rect | null = null;
-    for (const l of leaves) rect = unionRect(rect, { x: l.x, y: l.y, width: l.width, height: l.height });
+    for (const l of leaves) rect = unionRect(rect, layerRectWithEffects(l));
     const r = rect!;
     const merged = new Layer(r.width, r.height, { name: roots[roots.length - 1].name, x: r.x, y: r.y });
     compositeLayers(merged.ctx, inOrder, r.x, r.y);
@@ -713,18 +800,23 @@ export class Editor extends Emitter<EditorEvents> {
   // ---- textové vrstvy (0.6) ----
 
   /** Textovou vrstvu převede na rastrovou (kopie plátna bez textových dat) jako krok historie. */
-  rasterizeLayer(layer: Layer, label = 'Rastrovat text'): boolean {
-    if (!layer.text || this.isLocked(layer, 'lockPixels')) return false;
+  rasterizeLayer(layer: Layer, label = layer.fill ? 'Rastrovat výplňovou vrstvu' : 'Rastrovat text'): boolean {
+    if ((!layer.text && !layer.fill) || this.isLocked(layer, 'lockPixels')) return false;
     const before = captureLayer(layer);
     this.execute(new LayerStateCommand(this.doc, layer.id, before, { ...before, canvas: cloneCanvas(layer.canvas) }, label));
     return true;
   }
 
   /** Stav textové vrstvy s novými daty – zarovnaný okraj zůstane na místě, maska se přizpůsobí. */
-  textLayerState(layer: Layer, data: TextData): LayerState {
-    const old = layer.text ?? data;
+  textLayerState(layer: Layer, input: TextData): LayerState {
+    const old = layer.text ?? input;
+    const { origin, ...data } = input;
     const canvas = renderText(data);
-    const pos = anchoredPosition({ x: layer.x, y: layer.y, width: layer.width, data: old }, { width: canvas.width, data });
+    // Text z PSD se poprvé umístí podle účaří z Photoshopu, dál se drží zarovnaný okraj.
+    const anchor = origin ?? old.origin;
+    const pos = anchor
+      ? positionForClick(anchor.x, anchor.y, data, canvas.width)
+      : anchoredPosition({ x: layer.x, y: layer.y, width: layer.width, data: old }, { width: canvas.width, data });
     const rect = { ...pos, width: canvas.width, height: canvas.height };
     const mask = layer.mask && refitMask(layer.mask, { x: layer.x, y: layer.y, width: layer.width, height: layer.height }, rect);
     return { canvas, mask, ...pos };
@@ -970,6 +1062,42 @@ export class Editor extends Emitter<EditorEvents> {
   }
 
   /**
+   * Úpravy → Vyplnit vzorkem: výběr (bez výběru celou vrstvu) dlaždicemi vzorku zarovnanými na počátek
+   * dokumentu. Do masky nevyplňuje (vrací false).
+   */
+  fillPattern(patternId: string, label = 'Vyplnit vzorkem'): boolean {
+    const t = this.paintTarget();
+    if (!t || t.kind === 'mask' || !getPattern(patternId)) return false;
+    const { layer } = t;
+    const sel = this.doc.selection;
+    const rect = this.selectionRectIn(layer);
+    const cmd = this.paintLayer(layer, rect, label, (ctx) => {
+      if (!sel) {
+        ctx.fillStyle = canvasPattern(ctx, patternId, -layer.x, -layer.y)!;
+        ctx.fillRect(0, 0, layer.width, layer.height);
+        return;
+      }
+      const fill = createCanvas(sel.width, sel.height);
+      const f = get2d(fill);
+      f.drawImage(maskToCanvas(sel), 0, 0);
+      f.globalCompositeOperation = 'source-in';
+      f.fillStyle = canvasPattern(f, patternId)!;
+      f.fillRect(0, 0, fill.width, fill.height);
+      ctx.drawImage(fill, -layer.x, -layer.y);
+    });
+    if (!cmd) return false;
+    this.history.push(cmd);
+    return true;
+  }
+
+  /** Úpravy → Definovat vzorek: sloučený viditelný obraz ve výběru (bez výběru celé plátno). */
+  patternSource(): ImageData | null {
+    const piece = extractPixels({ canvas: flattenDocument(this.doc), x: 0, y: 0 }, this.doc.selection);
+    if (!piece) return null;
+    return get2d(piece.canvas).getImageData(0, 0, piece.canvas.width, piece.canvas.height);
+  }
+
+  /**
    * Úpravy → Obrys: obtáhne okraj výběru (bez výběru okraj obsahu aktivní vrstvy) barvou.
    * V masce kreslí jasem barvy. Vrací false, když není co obtáhnout.
    */
@@ -1034,6 +1162,8 @@ export class Editor extends Emitter<EditorEvents> {
     // Skupina nemá vlastní pixely.
     if (!layer || layer.isGroup) return null;
     if (this.maskTarget && layer.mask) return { layer, canvas: layer.mask, ctx: get2d(layer.mask), kind: 'mask' };
+    // Vrstva úprav nemá pixely – kreslí se do její masky (jako ve Photoshopu).
+    if (layer.adjustment) return layer.mask ? { layer, canvas: layer.mask, ctx: get2d(layer.mask), kind: 'mask' } : null;
     if (this.isLocked(layer, 'lockPixels')) return null;
     // Kreslit lze jen do rastrové vrstvy – text se nejdřív zrastruje (samostatný krok historie).
     this.rasterizeLayer(layer);
