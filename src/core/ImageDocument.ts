@@ -1,5 +1,6 @@
 import type { Rect } from './canvas';
 import { Emitter } from './Emitter';
+import type { Guide } from './guides';
 import { Layer, type LayerProps } from './Layer';
 import type { SelectionMask } from './selection/SelectionMask';
 
@@ -10,6 +11,8 @@ export type DocChange =
   /** `rect` = změněná oblast v souřadnicích dokumentu (chybí = celá vrstva). */
   | { kind: 'pixels'; layerId: string; rect?: Rect }
   | { kind: 'selection' }
+  /** Vodítka (nemění pixely). */
+  | { kind: 'guides' }
   | { kind: 'size' };
 
 /**
@@ -23,6 +26,8 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
   private extraSelected = new Set<string>();
   /** Aktuální výběr (maska o velikosti dokumentu) nebo null = nic není vybráno. */
   selection: SelectionMask | null = null;
+  /** Vodítka (px dokumentu). */
+  guides: readonly Guide[] = [];
   /** Zvyšuje se při každé změně – slouží k invalidaci cache (vzorkování pixelů apod.). */
   version = 0;
 
@@ -43,6 +48,12 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
     if (next === this.selection) return;
     this.selection = next;
     this.changed({ kind: 'selection' });
+  }
+
+  setGuides(guides: readonly Guide[]): void {
+    if (guides === this.guides) return;
+    this.guides = guides;
+    this.emit('change', { kind: 'guides' });
   }
 
   /** Změní rozměry plátna (vrstvy ani výběr neupravuje – to dělají příkazy). */
@@ -170,6 +181,7 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
       height: this.height,
       selection: this.selection,
       layers: new Map(this.layers.map((l) => [l.id, captureLayer(l)])),
+      guides: this.guides,
     };
   }
 
@@ -177,6 +189,7 @@ export class ImageDocument extends Emitter<{ change: DocChange }> {
     if (state.width !== this.width || state.height !== this.height) this.resize(state.width, state.height);
     for (const [id, ls] of state.layers) if (this.getLayer(id)) this.setLayerState(id, ls);
     this.setSelection(state.selection);
+    if (state.guides) this.setGuides(state.guides);
   }
 }
 
@@ -193,6 +206,8 @@ export interface DocState {
   height: number;
   selection: SelectionMask | null;
   layers: Map<string, LayerState>;
+  /** Vodítka po operaci (chybí = beze změny). */
+  guides?: readonly Guide[];
 }
 
 export function captureLayer(layer: Layer): LayerState {

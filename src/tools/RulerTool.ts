@@ -54,7 +54,8 @@ export class RulerTool implements Tool {
       this.dragging = end;
       return;
     }
-    const pt = { x: Math.round(p.x), y: Math.round(p.y) };
+    const at = this.editor.snap(p);
+    const pt = { x: Math.round(at.x), y: Math.round(at.y) };
     this.lines.set(this.editor.doc, { a: pt, b: { ...pt } });
     this.dragging = 'b';
     this.changed();
@@ -73,7 +74,7 @@ export class RulerTool implements Tool {
       const len = Math.hypot(x - other.x, y - other.y);
       x = other.x + Math.cos(t) * len;
       y = other.y + Math.sin(t) * len;
-    }
+    } else ({ x, y } = this.editor.snap(p));
     l[this.dragging] = { x: Math.round(x), y: Math.round(y) };
     this.changed();
   }

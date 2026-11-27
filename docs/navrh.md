@@ -457,6 +457,33 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
   oči (klik, druhé oko, odlesk, obdélník, pleť), vzorkovač myší (přidání, hodnoty, posun, obnova, limit, Alt+klik),
   pravítko myší (hodnoty, Shift, narovnání, zpět, vymazat).
 
+## Verze 0.25 – Vodítka, přichytávání, panel Info (hotovo)
+
+- core/guides.ts (čisté funkce): `Guide` (`h` = vodorovné ve výšce pos, `v` = svislé), přepočet při změně velikosti,
+  posunu (plátno s kotvou, oříznutí), otočení a převrácení; `snapValue` / `snapPoint` / `snapRectOffset` (okraje nebo střed
+  obdélníku, nejbližší cíl vyhrává), `hitGuide`.
+- ImageDocument: `guides` + `setGuides` (změna `guides` – nemění verzi pixelů, CompositeCache ani panel Vrstvy ji
+  neřeší); `DocState.guides` – operace s celým dokumentem vracejí i přepočtená vodítka, takže zpět/vpřed funguje samo.
+  `GuidesCommand` pro přidání / posun / smazání.
+- Editor: `viewOptions` (pomocné prvky, vodítka, okraje výběru, zámek, přichytávání a jeho cíle; v předvolbách),
+  `guideDrag` (náhled taženého vodítka), `snapTargets` (vodítka, hranice a střed dokumentu, okraje a středy obsahu
+  viditelných vrstev mimo posouvané; mezipaměť podle verze dokumentu a vodítek), `snap`, `snapRect`; dosah 8 px obrazovky.
+- CanvasView: tažení z pravítka (posluchače na okně, bez zachycení ukazatele), posun vodítka nástrojem Přesun nebo s Ctrl
+  (má přednost před nástrojem), puštění mimo plátno = smazat; kurzor nad vodítkem. Renderer kreslí vodítka (azurová
+  1 px, zamčená tlumeně) a okraje výběru jen při zapnutých pomocných prvcích.
+- Přichytávání v nástrojích: Výběr (oba body tažení i pevná velikost), Oříznutí (nový rámeček a úchyty), Pravítko,
+  Přesun (obdélník obsahu posouvaných vrstev nebo výběru; Shift drží osu).
+- Menu Zobrazení: Pomocné prvky, Zobrazit → Vodítka / Okraje výběru, Přichytávání, Přichytit k → Vodítka / Vrstvy /
+  Hranice dokumentu, Zamknout / Smazat vodítka, Nové vodítko…; zkratka se středníkem i podle fyzické klávesy (CZ rozložení).
+- ui/InfoPanel.ts: záložka Info (barva ze složeného obrazu rendereru – levné i během kreslení, poloha, rozměry, výběr,
+  vzorkovače, pravítko); obnova jednou za snímek a jen při zobrazení (`PanelTab.onShow`). Ikona Info v doku je funkční.
+- Projekt `.ptsp` (volitelné `guides`, verze formátu beze změny) a PSD (`gridAndGuidesInformation`) nesou vodítka.
+- Oprava rozvržení: panel Vrstvy (řádek zámků a výplně) byl o 14 px širší než dok – celá aplikace přetékala a při tažení
+  se posunula (oříznuté menu vlevo, kliky mimo cíl). Panel má `min-width: 0`, řádek je užší.
+- Testy: přepočet vodítek (velikost, posun, otočení proti otočení bodu, převrácení), přichytávání, zásah vodítka; e2e
+  vodítka myší z pravítek, zrušení, posun, smazání, zpět, Ctrl + jiný nástroj, zámek, Ctrl+H / Ctrl+;, přichycení výběru
+  a přesunu vrstvy, bez přichytávání, velikost obrazu, oříznutí, dialog, projekt a PSD, Smazat vodítka, panel Info.
+
 ## Plán dalších verzí
 
 ### Další
@@ -464,5 +491,5 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
 - Obrys (kontura) úkosu, záře a saténu; vzorek jako zdroj plechovky a štětce; styly skupin.
 - Svislý text, styly odstavce; masky skupin a ořezová maska nad skupinou.
 - Náhled zdroje uvnitř štětce razítka; retušování ve workeru; airbrush (sčítání efektu během tahu) a tlak pera.
-- Panel Info (vzorkovače, pravítko, poloha kurzoru); narovnání s ořezem; vodítka.
+- Mřížka a přichytávání k ní; narovnání s ořezem; řezy (Řez, Výběr řezu); Navigátor.
 - Výkon dál: rozdělení i pro vrstvy uvnitř skupin, změna krytí bez přepočtu zmenšeniny celého obrazu, případně WebGL.

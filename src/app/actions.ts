@@ -3,7 +3,7 @@ import { editFillLayer, fillLayerActions } from './fillLayers';
 import { filterActions } from './filters';
 import { definePattern, fillWithPattern } from './patternActions';
 import type { Action } from '../core/actions';
-import type { Editor } from '../core/Editor';
+import type { Editor, ViewOptions } from '../core/Editor';
 import { createBlankDocument } from '../core/ImageDocument';
 import { mergeDownTarget, visibleLayers } from '../core/merge';
 import { PSD_EXTENSION, savePsd } from '../io/psd';
@@ -700,6 +700,30 @@ export function registerActions(editor: Editor, app: AppContext): void {
       isChecked: () => !!document.fullscreenElement,
     },
 
+    // ---- Pomocné prvky, vodítka, přichytávání ----
+    ...viewToggles(editor),
+    { id: 'view.clearGuides', label: 'Smazat vodítka', run: () => editor.clearGuides(), isEnabled: () => editor.doc.guides.length > 0 },
+    {
+      id: 'view.addGuide',
+      label: 'Nové vodítko…',
+      run: async () => {
+        const v = await showForm('Nové vodítko', [
+          {
+            kind: 'select',
+            key: 'dir',
+            label: 'Orientace',
+            value: 'h',
+            options: [
+              { value: 'h', label: 'Vodorovné' },
+              { value: 'v', label: 'Svislé' },
+            ],
+          },
+          { kind: 'number', key: 'pos', label: 'Poloha', value: 0, min: -100000, max: 100000, step: 1, unit: 'px' },
+        ]);
+        if (v) editor.addGuide({ dir: v.dir === 'v' ? 'v' : 'h', pos: Number(v.pos) });
+      },
+    },
+
     // ---- Barvy a štětec ----
     {
       id: 'color.swap',
@@ -756,5 +780,32 @@ export function registerActions(editor: Editor, app: AppContext): void {
     ['paths', 'Cesty'],
     ['swatches', 'Vzorník'],
   ];
+  editor.actions.register({ id: 'window.info', label: 'Info', run: () => app.showPanel('info') });
   for (const [id, label] of panels) editor.actions.register({ id: `window.${id}`, label, run: () => app.showPanel(id) });
+}
+
+/** Přepínače menu Zobrazení (pomocné prvky, vodítka, přichytávání); stav se pamatuje v předvolbách. */
+function viewToggles(editor: Editor): Action[] {
+  const toggle = (id: string, label: string, key: keyof ViewOptions, shortcuts?: string[], isEnabled?: () => boolean): Action => ({
+    id,
+    label,
+    shortcuts,
+    isEnabled,
+    run: () => {
+      editor.setViewOptions({ [key]: !editor.viewOptions[key] });
+      savePreferences({ viewOptions: editor.viewOptions });
+    },
+    isChecked: () => editor.viewOptions[key],
+  });
+  const snapOn = () => editor.viewOptions.snap;
+  return [
+    toggle('view.extras', 'Pomocné prvky', 'extras', ['Ctrl+H']),
+    toggle('view.guides', 'Vodítka', 'guides', ['Ctrl+;']),
+    toggle('view.selectionEdges', 'Okraje výběru', 'selectionEdges'),
+    toggle('view.snap', 'Přichytávání', 'snap', ['Ctrl+Shift+;']),
+    toggle('view.snapGuides', 'Vodítka', 'snapGuides', undefined, snapOn),
+    toggle('view.snapLayers', 'Vrstvy', 'snapLayers', undefined, snapOn),
+    toggle('view.snapDocument', 'Hranice dokumentu', 'snapDocument', undefined, snapOn),
+    toggle('view.lockGuides', 'Zamknout vodítka', 'lockGuides', ['Ctrl+Alt+;']),
+  ];
 }

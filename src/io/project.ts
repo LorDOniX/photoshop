@@ -1,3 +1,4 @@
+import type { Guide } from '../core/guides';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { createCanvas, get2d } from '../core/canvas';
 import { getPattern, isBuiltinPattern, patternCanvas, registerPattern } from '../core/patterns';
@@ -38,6 +39,8 @@ interface ProjectManifest {
   layers: LayerManifest[];
   /** Vzorky použité ve stylech vrstev (kromě vestavěných), aby projekt fungoval i bez knihovny. */
   patterns?: Array<{ id: string; name: string; file: string }>;
+  /** Vodítka (h = vodorovné ve výšce pos, v = svislé). */
+  guides?: Guide[];
 }
 
 /** Zámky vrstvy (starší projekty je nemají). */
@@ -109,6 +112,7 @@ export async function saveProject(doc: ImageDocument): Promise<Blob> {
     activeLayerId: doc.activeLayerId,
     layers,
     ...(patterns.length ? { patterns } : {}),
+    ...(doc.guides.length ? { guides: doc.guides.map((g) => ({ dir: g.dir, pos: g.pos })) } : {}),
   };
   files['project.json'] = strToU8(JSON.stringify(manifest, null, 2));
   // PNG jsou už komprimované – ukládáme bez další komprese (rychlejší).
@@ -160,5 +164,6 @@ export async function loadProject(data: ArrayBuffer): Promise<ImageDocument> {
     doc.insertLayer(layer);
   }
   doc.setActive(manifest.activeLayerId);
+  doc.guides = (manifest.guides ?? []).filter((g) => (g.dir === 'h' || g.dir === 'v') && Number.isFinite(g.pos));
   return doc;
 }

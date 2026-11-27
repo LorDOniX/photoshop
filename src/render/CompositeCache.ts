@@ -69,7 +69,7 @@ export class CompositeCache {
 
   /** Zpracuje změnu dokumentu – rozhodne, co je potřeba přeskládat. */
   onChange(c: DocChange): void {
-    if (c.kind === 'selection') return;
+    if (c.kind === 'selection' || c.kind === 'guides') return;
     if (c.kind === 'pixels' || c.kind === 'props') {
       if (this.split?.midIds.has(c.layerId)) {
         if (c.kind === 'pixels' && c.rect && this.midDirty !== true) {

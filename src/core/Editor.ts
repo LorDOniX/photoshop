@@ -10,7 +10,8 @@ import {
   type PaintTargetKind,
 } from './commands/layerCommands';
 import { SetSelectionCommand } from './commands/selectionCommands';
-import { DocStateCommand, LayerStateCommand } from './commands/stateCommands';
+import { DocStateCommand, GuidesCommand, LayerStateCommand } from './commands/stateCommands';
+import { snapPoint, snapRectOffset, type Guide, type SnapTargets } from './guides';
 import { clipRect, cloneCanvas, createCanvas, get2d, unionRect, type Rect } from './canvas';
 import { Emitter } from './Emitter';
 import { History, type Command } from './History';
@@ -113,6 +114,23 @@ export const DEFAULT_HISTORY_MEMORY = 1024 * 1024 * 1024;
 const RESTORED: Command = { label: 'Obnoveno', do: () => {}, undo: () => {} };
 
 /** Centrální stav aplikace – otevřené dokumenty, historie, pohled, nástroje a akce. */
+/** Pomocné prvky a přichytávání (menu Zobrazení). */
+export interface ViewOptions {
+  /** Pomocné prvky (Ctrl+H) – vypnutí skryje vodítka i okraje výběru. */
+  extras: boolean;
+  guides: boolean;
+  selectionEdges: boolean;
+  lockGuides: boolean;
+  /** Přichytávání (Ctrl+Shift+;) a k čemu. */
+  snap: boolean;
+  snapGuides: boolean;
+  snapDocument: boolean;
+  snapLayers: boolean;
+}
+
+/** Vzdálenost přichycení v px obrazovky. */
+export const SNAP_DISTANCE = 8;
+
 export class Editor extends Emitter<EditorEvents> {
   /** Otevřené dokumenty v pořadí záložek. */
   readonly sessions: DocSession[] = [];
@@ -299,6 +317,81 @@ export class Editor extends Emitter<EditorEvents> {
 
   notifyView(): void {
     this.emit('view');
+  }
+
+  // ---- vodítka a přichytávání ----
+
+  viewOptions: ViewOptions = { extras: true, guides: true, selectionEdges: true, lockGuides: false, snap: true, snapGuides: true, snapDocument: true, snapLayers: true };
+  /** Právě tažené vodítko (z pravítka nebo posouvané) – kreslí se místo `doc.guides[index]`. */
+  guideDrag: { guide: Guide; index: number | null } | null = null;
+  private snapCache: { doc: ImageDocument; version: number; key: string; guides: readonly Guide[]; targets: SnapTargets } | null = null;
+
+  setViewOptions(patch: Partial<ViewOptions>): void {
+    this.viewOptions = { ...this.viewOptions, ...patch };
+    this.notifyView();
+  }
+
+  /** Vodítka jsou vidět (a jde k nim přichytávat). */
+  get guidesVisible(): boolean {
+    return this.viewOptions.extras && this.viewOptions.guides;
+  }
+
+  /** Nová vodítka jako krok historie. */
+  setGuides(guides: readonly Guide[], label: string): void {
+    this.execute(new GuidesCommand(this.doc, this.doc.guides, guides, label));
+  }
+
+  addGuide(guide: Guide): void {
+    this.setGuides([...this.doc.guides, guide], 'Nové vodítko');
+    // Nové vodítko musí být vidět.
+    if (!this.guidesVisible) this.setViewOptions({ extras: true, guides: true });
+  }
+
+  clearGuides(): void {
+    if (this.doc.guides.length) this.setGuides([], 'Smazat vodítka');
+  }
+
+  /**
+   * Cíle přichytávání: vodítka, hranice a střed dokumentu, okraje a středy obsahu viditelných vrstev
+   * (kromě `exclude` – posouvané vrstvy). Prázdné, když je přichytávání vypnuté.
+   */
+  snapTargets(exclude: readonly string[] = []): SnapTargets {
+    const o = this.viewOptions;
+    if (!o.snap) return { xs: [], ys: [] };
+    const doc = this.doc;
+    const key = `${o.snapGuides && this.guidesVisible}|${o.snapDocument}|${o.snapLayers}|${exclude.join(',')}`;
+    const c = this.snapCache;
+    // Verze dokumentu se mění s pixely a velikostí; vodítka mají vlastní referenci.
+    if (c && c.doc === doc && c.version === doc.version && c.key === key && c.guides === doc.guides) return c.targets;
+    const xs: number[] = [];
+    const ys: number[] = [];
+    if (o.snapGuides && this.guidesVisible) for (const g of doc.guides) (g.dir === 'v' ? xs : ys).push(g.pos);
+    if (o.snapDocument) {
+      xs.push(0, doc.width / 2, doc.width);
+      ys.push(0, doc.height / 2, doc.height);
+    }
+    if (o.snapLayers) {
+      for (const l of doc.layers) {
+        if (l.isGroup || !l.visible || exclude.includes(l.id) || l.adjustment) continue;
+        const b = alphaBounds(l.ctx.getImageData(0, 0, l.width, l.height).data, l.width, l.height);
+        if (!b) continue;
+        xs.push(b.x + l.x, b.x + l.x + b.width / 2, b.x + l.x + b.width);
+        ys.push(b.y + l.y, b.y + l.y + b.height / 2, b.y + l.y + b.height);
+      }
+    }
+    const targets = { xs, ys };
+    this.snapCache = { doc, version: doc.version, key, guides: doc.guides, targets };
+    return targets;
+  }
+
+  /** Přichytí bod dokumentu (nástroje výběru, oříznutí, pravítko). */
+  snap(p: { x: number; y: number }, exclude?: readonly string[]): { x: number; y: number } {
+    return snapPoint(p, this.snapTargets(exclude), SNAP_DISTANCE / this.viewport.zoom);
+  }
+
+  /** Korekce posunu obdélníku (nástroj Přesun) – okraje nebo střed k nejbližšímu cíli. */
+  snapRect(r: Rect, exclude?: readonly string[]): { dx: number; dy: number } {
+    return snapRectOffset(r, this.snapTargets(exclude), SNAP_DISTANCE / this.viewport.zoom);
   }
 
   execute(command: Command): void {

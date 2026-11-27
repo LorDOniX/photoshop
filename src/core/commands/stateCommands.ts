@@ -1,4 +1,5 @@
 import { canvasBytes, type Command } from '../History';
+import type { Guide } from '../guides';
 import type { DocState, ImageDocument, LayerState } from '../ImageDocument';
 
 /**
@@ -58,4 +59,22 @@ export class DocStateCommand implements Command {
 /** Paměť plátna a masky, které drží jen jeden ze stavů (nová plátna po transformaci apod.). */
 function stateBytes(before: LayerState, after: LayerState): number {
   return (before.canvas !== after.canvas ? canvasBytes(before.canvas) : 0) + (before.mask !== after.mask ? canvasBytes(before.mask) : 0);
+}
+
+/** Změna vodítek (přidání, posun, smazání). */
+export class GuidesCommand implements Command {
+  constructor(
+    private readonly doc: ImageDocument,
+    private readonly before: readonly Guide[],
+    private readonly after: readonly Guide[],
+    readonly label: string,
+  ) {}
+
+  do(): void {
+    this.doc.setGuides(this.after);
+  }
+
+  undo(): void {
+    this.doc.setGuides(this.before);
+  }
 }

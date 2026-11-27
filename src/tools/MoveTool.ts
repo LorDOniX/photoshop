@@ -12,6 +12,7 @@ import {
   LayoutGrid,
   Move,
 } from 'lucide';
+import { unionRect, type Rect } from '../core/canvas';
 import type { Editor } from '../core/Editor';
 import { FloatingSelection } from '../core/transform/floating';
 import { checkbox, iconButton, selectField, separator } from '../ui/controls';
@@ -37,8 +38,8 @@ export class MoveTool implements Tool {
   readonly shortcut = 'V';
   readonly cursor = 'move';
   /** Tažené vrstvy (u skupiny všechny její vrstvy) s původní polohou. */
-  private drag: { items: Array<{ id: string; x: number; y: number }>; startX: number; startY: number } | null = null;
-  private floating: { session: FloatingSelection; startX: number; startY: number } | null = null;
+  private drag: { items: Array<{ id: string; x: number; y: number }>; startX: number; startY: number; bounds: Rect | null } | null = null;
+  private floating: { session: FloatingSelection; startX: number; startY: number; bounds: Rect | null; exclude: string[] } | null = null;
   private frame = 0;
   private pending: { dx: number; dy: number } | null = null;
 
@@ -49,19 +50,32 @@ export class MoveTool implements Tool {
     if (p.button !== 0 || !layer) return;
     const session = FloatingSelection.start(this.editor, p.altKey);
     if (session) {
-      this.floating = { session, startX: p.x, startY: p.y };
+      this.floating = { session, startX: p.x, startY: p.y, bounds: this.editor.doc.selection?.bounds() ?? null, exclude: [layer.id] };
       return;
     }
-    const items = this.editor.movableSelection().map((l) => ({ id: l.id, x: l.x, y: l.y }));
-    if (items.length) this.drag = { items, startX: p.x, startY: p.y };
+    const layers = this.editor.movableSelection();
+    const items = layers.map((l) => ({ id: l.id, x: l.x, y: l.y }));
+    // Obdélník obsahu posouvaných vrstev – jeho okraje a střed se přichytávají.
+    let bounds: Rect | null = null;
+    for (const l of layers) {
+      const b = l.isGroup ? null : this.editor.contentBounds(l);
+      if (b) bounds = unionRect(bounds, b);
+    }
+    if (items.length) this.drag = { items, startX: p.x, startY: p.y, bounds };
   }
 
-  private offset(p: ToolPointer, sx: number, sy: number): { dx: number; dy: number } {
+  /** Posun od začátku tažení (Shift = jen vodorovně / svisle); obdélník `bounds` se přichytí k vodítkům apod. */
+  private offset(p: ToolPointer, sx: number, sy: number, bounds: Rect | null = null, exclude: readonly string[] = []): { dx: number; dy: number } {
     let dx = Math.round(p.x - sx);
     let dy = Math.round(p.y - sy);
     if (p.shiftKey) {
       if (Math.abs(dx) > Math.abs(dy)) dy = 0;
       else dx = 0;
+    }
+    if (bounds) {
+      const c = this.editor.snapRect({ ...bounds, x: bounds.x + dx, y: bounds.y + dy }, exclude);
+      if (!p.shiftKey || dx) dx = Math.round(dx + c.dx);
+      if (!p.shiftKey || dy) dy = Math.round(dy + c.dy);
     }
     return { dx, dy };
   }
@@ -70,7 +84,7 @@ export class MoveTool implements Tool {
     const f = this.floating;
     if (f) {
       // Přeskládání vrstvy je dražší – slučujeme do jednoho snímku.
-      this.pending = this.offset(p, f.startX, f.startY);
+      this.pending = this.offset(p, f.startX, f.startY, f.bounds, f.exclude);
       if (!this.frame) {
         this.frame = requestAnimationFrame(() => {
           this.frame = 0;
@@ -81,7 +95,7 @@ export class MoveTool implements Tool {
     }
     const d = this.drag;
     if (!d) return;
-    const { dx, dy } = this.offset(p, d.startX, d.startY);
+    const { dx, dy } = this.offset(p, d.startX, d.startY, d.bounds, d.items.map((i) => i.id));
     for (const it of d.items) this.editor.doc.updateLayer(it.id, { x: it.x + dx, y: it.y + dy });
   }
 
@@ -91,7 +105,7 @@ export class MoveTool implements Tool {
       this.floating = null;
       cancelAnimationFrame(this.frame);
       this.frame = 0;
-      const { dx, dy } = this.offset(p, f.startX, f.startY);
+      const { dx, dy } = this.offset(p, f.startX, f.startY, f.bounds, f.exclude);
       f.session.moveTo(dx, dy);
       f.session.commit();
       return;

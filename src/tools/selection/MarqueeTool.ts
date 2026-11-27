@@ -55,11 +55,13 @@ export class MarqueeTool implements Tool {
     const o = this.editor.selectionOptions;
     if (o.style === 'size') {
       // Pevná velikost: klik umístí výběr levým horním rohem do kurzoru.
-      this.commit({ x: Math.round(p.x), y: Math.round(p.y), width: o.fixedWidth, height: o.fixedHeight }, mode);
+      const at = this.editor.snap(p);
+      this.commit({ x: Math.round(at.x), y: Math.round(at.y), width: o.fixedWidth, height: o.fixedHeight }, mode);
       return;
     }
-    const x = Math.round(p.x);
-    const y = Math.round(p.y);
+    const at = this.editor.snap(p);
+    const x = Math.round(at.x);
+    const y = Math.round(at.y);
     this.drag = {
       sx: x,
       sy: y,
@@ -80,8 +82,9 @@ export class MarqueeTool implements Tool {
     if (this.outline) return this.outline.move(p);
     const d = this.drag;
     if (!d) return;
-    d.x = Math.round(p.x);
-    d.y = Math.round(p.y);
+    const at = this.editor.snap(p);
+    d.x = Math.round(at.x);
+    d.y = Math.round(at.y);
     if (!p.shiftKey) d.shiftForMode = false;
     if (!p.altKey) d.altForMode = false;
     d.shift = p.shiftKey && !d.shiftForMode;

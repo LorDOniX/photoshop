@@ -1,4 +1,5 @@
 import { createCanvas, get2d } from './canvas';
+import { flipGuides, offsetGuides, rotateGuides, scaleGuides } from './guides';
 import type { DocState, ImageDocument, LayerState } from './ImageDocument';
 import { maskToCanvas, rasterizeMask } from './selection/raster';
 import type { SelectionMask } from './selection/SelectionMask';
@@ -58,6 +59,7 @@ export function resizeImage(doc: ImageDocument, width: number, height: number, s
     width,
     height,
     layers,
+    guides: scaleGuides(doc.guides, sx, sy),
     selection: mapSelection(doc.selection, width, height, (ctx, src) => {
       ctx.imageSmoothingEnabled = smooth;
       ctx.drawImage(src, 0, 0, width, height);
@@ -104,6 +106,7 @@ export function resizeCanvas(doc: ImageDocument, width: number, height: number, 
       return { ...s, x: s.x + dx, y: s.y + dy };
     }),
     selection: mapSelection(doc.selection, width, height, (ctx, src) => ctx.drawImage(src, dx, dy)),
+    guides: offsetGuides(doc.guides, dx, dy),
   };
 }
 
@@ -133,6 +136,7 @@ export function rotateDocument(doc: ImageDocument, quarterTurns: 1 | 2 | 3): Doc
     width,
     height,
     layers: mapLayers(doc, (s) => ({ canvas: rot(s.canvas), mask: s.mask && rot(s.mask), ...position(s) })),
+    guides: rotateGuides(doc.guides, quarterTurns, W, H),
     selection: mapSelection(doc.selection, width, height, (ctx, src) => {
       ctx.translate(width / 2, height / 2);
       ctx.rotate(angle);
@@ -154,6 +158,7 @@ export function flipDocument(doc: ImageDocument, axis: 'h' | 'v'): DocState {
   return {
     width: W,
     height: H,
+    guides: flipGuides(doc.guides, axis, W, H),
     layers: mapLayers(doc, (s) => ({
       canvas: flip(s.canvas),
       mask: s.mask && flip(s.mask),
@@ -178,6 +183,7 @@ export function cropDocument(doc: ImageDocument, rect: Bounds, deletePixels: boo
     width,
     height,
     selection: null,
+    guides: offsetGuides(doc.guides, -rect.x, -rect.y),
     layers: mapLayers(doc, (s) => {
       const x = s.x - rect.x;
       const y = s.y - rect.y;

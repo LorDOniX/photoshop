@@ -662,7 +662,10 @@ button {
 .panel {
   display: flex;
   flex-direction: column;
+  /* Panel nesmí být širší než sloupec doku – jinak přeteče celá aplikace a při tažení se posune. */
+  min-width: 0;
   min-height: 0;
+  overflow: hidden;
   background: var(--panel);
 }
 .panel-header {
@@ -779,8 +782,12 @@ button {
 .layer-controls {
   display: flex;
   align-items: center;
-  gap: 4px;
+  gap: 2px;
   padding: 4px 4px 0;
+}
+/* Řádek zámků a výplně se musí vejít do šířky doku. */
+.layer-controls .slider-input {
+  width: 50px;
 }
 .blend-select {
   width: 120px;
@@ -1420,6 +1427,38 @@ button {
   white-space: pre;
 }
 .sampler-readout .color-chip {
+  width: 14px;
+  height: 14px;
+}
+
+/* Panel Info */
+.info-panel {
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-variant-numeric: tabular-nums;
+}
+.info-extra {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.info-extra:not(:empty) {
+  border-top: 1px solid #3a3a3a;
+  padding-top: 4px;
+}
+.info-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  white-space: pre;
+}
+.info-label {
+  width: 56px;
+  color: #9a9a9a;
+}
+.info-chip {
   width: 14px;
   height: 14px;
 }

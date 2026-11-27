@@ -159,7 +159,7 @@ export class LayersPanel {
     editor.on('document', rebuild);
     editor.on('target', rebuild);
     editor.on('docChange', (c) => {
-      if (c.kind === 'selection') return;
+      if (c.kind === 'selection' || c.kind === 'guides') return;
       if (c.kind === 'pixels') {
         this.dirtyThumbs.add(c.layerId);
         refreshThumbs();

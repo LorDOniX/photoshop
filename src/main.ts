@@ -37,6 +37,7 @@ import { MarqueeTool } from './tools/selection/MarqueeTool';
 import { QuickSelectTool } from './tools/selection/QuickSelectTool';
 import { CanvasView } from './ui/CanvasView';
 import { Dock, TabbedPanel } from './ui/Dock';
+import { InfoPanel } from './ui/InfoPanel';
 import { DocumentTabs, StatusBar } from './ui/DocumentTabs';
 import { HistoryPanel } from './ui/HistoryPanel';
 import { LayersPanel } from './ui/LayersPanel';
@@ -55,6 +56,7 @@ const prefs = loadPreferences();
 // Uživatelské vzorky z knihovny (asynchronně – vrstvy s nimi se překreslí, až se načtou).
 void loadUserPatterns();
 if (prefs.historyMemoryLimit) editor.setHistoryMemoryLimit(prefs.historyMemoryLimit);
+if (prefs.viewOptions) editor.setViewOptions(prefs.viewOptions);
 // Jen ve vývojovém režimu – pro ladění v konzoli prohlížeče.
 if (import.meta.env.DEV) Object.assign(window, { editor, idle });
 editor.on('notice', (message) => showToast(message));
@@ -196,9 +198,11 @@ registerActions(editor, {
 });
 const menus = buildMenus(editor.actions);
 
+const infoPanel = new InfoPanel(editor, () => canvasView.renderer.cache.composite);
 const historyGroup = new TabbedPanel(editor.actions, [
   { id: 'history', title: 'Historie', element: new HistoryPanel(editor).element, menu: menus.panels.history },
   { id: 'swatches', title: 'Vzorník', element: createSwatchesPanel(editor), menu: menus.panels.swatches },
+  { id: 'info', title: 'Info', element: infoPanel.element, onShow: () => infoPanel.update() },
 ]);
 const layersGroup = new TabbedPanel(editor.actions, [
   { id: 'layers', title: 'Vrstvy', element: new LayersPanel(editor, { row: menus.layerContext, mask: menus.maskContext }).element, menu: menus.panels.layers },
@@ -208,7 +212,7 @@ const layersGroup = new TabbedPanel(editor.actions, [
 dock = new Dock(
   [
     [
-      { icon: Info, title: 'Info' },
+      { icon: Info, title: 'Info', panel: 'info' },
       { icon: SlidersHorizontal, title: 'Vlastnosti' },
     ],
     [{ icon: Paintbrush, title: 'Štětec' }],

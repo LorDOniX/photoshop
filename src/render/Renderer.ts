@@ -212,7 +212,34 @@ export class Renderer {
       ctx.drawImage(composite, vp.panX, vp.panY, w, h);
     }
 
-    this.drawSelection(ctx, dpr);
+    const o = this.editor.viewOptions;
+    if (o.extras && o.selectionEdges) this.drawSelection(ctx, dpr);
+    this.drawGuides(ctx);
     this.editor.activeTool?.drawOverlay?.(ctx, this.editor);
+  }
+
+  /** Vodítka přes celý pohled (azurová čára 1 px); tažené vodítko i při skrytých vodítkách. */
+  private drawGuides(ctx: CanvasRenderingContext2D): void {
+    const { doc, viewport: vp, guideDrag } = this.editor;
+    const list = this.editor.guidesVisible ? doc.guides.filter((_, i) => i !== guideDrag?.index) : [];
+    if (guideDrag) list.push(guideDrag.guide);
+    if (!list.length) return;
+    ctx.save();
+    ctx.lineWidth = 1;
+    ctx.strokeStyle = this.editor.viewOptions.lockGuides ? 'rgba(0, 200, 220, 0.6)' : '#00d8ff';
+    ctx.beginPath();
+    for (const g of list) {
+      if (g.dir === 'v') {
+        const x = Math.round(vp.panX + g.pos * vp.zoom) + 0.5;
+        ctx.moveTo(x, 0);
+        ctx.lineTo(x, vp.height);
+      } else {
+        const y = Math.round(vp.panY + g.pos * vp.zoom) + 0.5;
+        ctx.moveTo(0, y);
+        ctx.lineTo(vp.width, y);
+      }
+    }
+    ctx.stroke();
+    ctx.restore();
   }
 }

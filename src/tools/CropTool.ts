@@ -72,12 +72,15 @@ export class CropTool implements Tool {
     let hit = hitTestBox(this.editor, t, p, { rotate: false, edges: !this.ratioValue() });
     // Výchozí rámeček (celé plátno): tah uvnitř nakreslí nový rámeček, jako ve Photoshopu.
     if (!this.rect && hit.kind === 'move') hit = { kind: 'outside' };
-    this.drag = { hit, start: t, from: { x: p.x, y: p.y } };
+    // Nový rámeček začíná v přichyceném bodě (vodítka, okraje).
+    this.drag = { hit, start: t, from: hit.kind === 'outside' ? this.editor.snap(p) : { x: p.x, y: p.y } };
   }
 
-  pointerMove(p: ToolPointer): void {
+  pointerMove(pointer: ToolPointer): void {
     const d = this.drag;
     if (!d) return;
+    // Úchyty a nový rámeček se přichytávají, posun celého rámečku ne.
+    const p = d.hit.kind === 'move' ? pointer : { ...pointer, ...this.editor.snap(pointer) };
     const ratio = this.ratioValue();
     if (d.hit.kind === 'handle') this.rect = dragHandle(d.start, d.hit.handle, p, !!ratio, p.altKey);
     else if (d.hit.kind === 'move') this.rect = { ...d.start, cx: d.start.cx + (p.x - d.from.x), cy: d.start.cy + (p.y - d.from.y) };

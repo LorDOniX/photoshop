@@ -11,6 +11,8 @@ export interface PanelTab {
   element: HTMLElement;
   /** Položky nabídky ≡ pro tuto záložku. */
   menu?: MenuItem[];
+  /** Zavolá se po zobrazení záložky (obnovení obsahu, který se při skrytí neaktualizuje). */
+  onShow?(): void;
 }
 
 /** Skupina panelů se záložkami (např. Vrstvy | Kanály | Cesty). */
@@ -56,12 +58,15 @@ export class TabbedPanel {
     this.active = tab;
     for (const t of this.tabs) t.button.classList.toggle('active', t === tab);
     this.body.replaceChildren(tab.element);
+    tab.onShow?.();
   }
 }
 
 export interface DockIcon {
   icon: IconNode | string;
   title: string;
+  /** Panel, který ikona zobrazí (bez něj je ikona jen připravená). */
+  panel?: string;
 }
 
 /** Pravý dok: sloupec ikon sbalených panelů + sloupec panelů se záložkami. */
@@ -82,7 +87,12 @@ export class Dock {
           ...group.map((item) =>
             h(
               'button',
-              { class: 'dock-icon', type: 'button', title: `${item.title} – připravujeme` },
+              {
+                class: 'dock-icon',
+                type: 'button',
+                title: item.panel ? item.title : `${item.title} – připravujeme`,
+                onClick: item.panel ? () => this.showPanel(item.panel!) : undefined,
+              },
               typeof item.icon === 'string' ? h('span', { class: 'dock-icon-text' }, item.icon) : icon(item.icon, 18),
             ),
           ),

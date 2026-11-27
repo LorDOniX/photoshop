@@ -59,6 +59,8 @@ mají v liště voleb štítek „Připravujeme“ a jejich volby zatím nic ned
 | Posun pohledu | dva prsty na touchpadu (všemi směry), kolečko myši (Shift = vodorovně), mezerník + tažení, prostřední tlačítko |
 | Zoom (k místu kurzoru) | sevření prstů, `Ctrl` / `Cmd` / `Alt` + kolečko nebo dva prsty, `Ctrl++` / `Ctrl+-`, `Ctrl+0` přizpůsobit, `Ctrl+1` pixel na pixel |
 | Pravítka | `Ctrl+R` |
+| Pomocné prvky / vodítka / přichytávání / zamknout vodítka | `Ctrl+H` / `Ctrl+;` / `Ctrl+Shift+;` / `Ctrl+Alt+;` |
+| Nové vodítko / posun / smazání | tažení z pravítka / tažení nástrojem Přesun (nebo s Ctrl) / vytažení mimo plátno |
 | Krok zpět / vpřed | `Ctrl+Z` / `Ctrl+Shift+Z`, `Ctrl+Y` |
 | Předvolby (paměť historie) | `Ctrl+K` |
 | Nová vrstva | `Alt+Shift+N` |
@@ -236,6 +238,20 @@ takže se otevřou správně i jinde.
 **Slučování:** *Sloučit dolů* vykreslí aktivní vrstvu (s krytím, režimem prolnutí a maskou) do vrstvy pod ní; výsledek si ponechá
 název, krytí a režim spodní vrstvy (jako ve Photoshopu). *Sloučit viditelné* spojí viditelné vrstvy do jedné, skryté zůstanou.
 *Zploštit obraz* složí vše na bílé pozadí velikosti plátna a skryté vrstvy zahodí (po potvrzení).
+
+**Vodítka a přichytávání:** vodítko vznikne tažením z horního (vodorovné) nebo levého (svislé) pravítka, nebo přes
+Zobrazení → Nové vodítko… (orientace a poloha v px). Nástrojem Přesun (s jiným nástrojem se stisknutým Ctrl) jde vodítko
+posunout, vytažením zpět na pravítko nebo mimo plátno se smaže. Přidání, posun i smazání jsou kroky historie. Vodítka
+se přepočítají při změně velikosti obrazu a plátna, oříznutí, otočení a převrácení a ukládají se do projektu i PSD.
+*Přichytávání* (Zobrazení → Přichytit k: vodítka, vrstvy, hranice dokumentu) přitahuje na 8 px obrazovky okraje
+obdélníkového / eliptického výběru, rámeček oříznutí, konce pravítka, nová vodítka a při posunu nástrojem Přesun okraje
+nebo střed obsahu vrstvy (i vybraných pixelů) – k vodítkům, okrajům a středu dokumentu a okrajům a středům obsahu ostatních
+vrstev. *Pomocné prvky* (`Ctrl+H`) skryjí vodítka i okraje výběru, *Zamknout vodítka* zabrání jejich posunu. Nastavení
+menu Zobrazení si prohlížeč pamatuje.
+
+**Panel Info** (záložka vedle Historie a Vzorníku, ikona ⓘ v doku nebo Okno → Info): barva pod kurzorem (RGB a hex,
+ze všech viditelných vrstev), poloha kurzoru, rozměry dokumentu, velikost a poloha výběru, hodnoty vzorkovačů barev
+a měření pravítka.
 
 Levý panel nástrojů se v nízkém okně rozloží do dvou až tří sloupců.
 

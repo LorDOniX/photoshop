@@ -781,6 +781,7 @@ export async function loadPsd(buffer: ArrayBuffer): Promise<PsdImport> {
     doc.insertLayer(layer);
   }
   doc.setActive(doc.layers.filter((l) => !l.isGroup).at(-1)?.id ?? null);
+  doc.guides = (psd.imageResources?.gridAndGuidesInformation?.guides ?? []).map((g) => ({ dir: g.direction === 'vertical' ? 'v' : 'h', pos: g.location }));
   return { doc, warnings: [...warnings] };
 }
 
@@ -841,6 +842,11 @@ export async function savePsd(doc: ImageDocument): Promise<Blob> {
     // Sloučený obraz – náhledy v jiných programech a otevření bez podpory vrstev.
     canvas: flattenDocument(doc),
   };
+  if (doc.guides.length) {
+    psd.imageResources = {
+      gridAndGuidesInformation: { guides: doc.guides.map((g) => ({ location: g.pos, direction: g.dir === 'v' ? 'vertical' : 'horizontal' })) },
+    };
+  }
   // Vzorky použité ve stylech (i vestavěné – Photoshop je nezná).
   const used = [...new Set(doc.layers.flatMap(layerPatternIds))].map(getPattern).filter((p) => !!p);
   if (used.length) {
