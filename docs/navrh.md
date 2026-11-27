@@ -417,11 +417,32 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
   cíle), zámek; guma pozadí průběžně, tolerance, nesouvislé / souvislé, jednou, barva pozadí, chránit popředí, výběr,
   měkká tolerance bez sčítání, maska.
 
+## Verze 0.23 – Rozostření, zostření, rozmazání, zesvětlení, ztmavení, houba (hotovo)
+
+- core/paint/retouch.ts (čisté funkce): `brushWeight` (měkký okraj podle tvrdosti, smoothstep; 100 % = kruh s vyhlazeným
+  okrajem), `toneCurve` / `toneImage` (střední tóny = gama, stíny / světla s vahou podle hodnoty, všechny křivky rostoucí
+  i při expozici 100 %; Chránit tóny = křivka z jasu a škálování barev k černé / bílé, jinak po kanálech), `spongeImage`
+  (posun od / k šedé stejného jasu, živost bez ořezu kanálů), `blurImage` (Gauss σ = 0,5 + 3 · síla), `sharpenImage`
+  (maska rozostření 1 px, 0–200 %), `smudgeDab` / `smudgeCarry` (nesená barva jako v GIMPu, předem vynásobená alfa),
+  `mixByWeight` (míchání s předem vynásobenou alfou, zamčená průhlednost).
+- tools/RetouchTool.ts – jeden nástroj, šest režimů. Efektové režimy: stopa = maximum otisků (Uint8 přes plátno cíle),
+  efekt se počítá z obrazu na začátku tahu po dlaždicích 128 × 128 (rozostření s okolím) až při prvním dotyku tahu,
+  dotčený obdélník = originál + (efekt − originál) · stopa · výběr. V jednom tahu se tak efekt nesčítá, další tah ano.
+  Rozostření / zostření ze všech vrstev = efekt ze složeného obrazu zapsaný do aktivní vrstvy. Rozmazání: otisky po
+  1/25 velikosti (řidší nechávaly „žebra“), síla přepočtená na úbytek nesené barvy na 1/10 velikosti štětce.
+  Maska se upravuje jako šedý obraz (hodnota v RGB, zpět do alfy); houba masku nemění (upozornění).
+- Nahradily zástupné nástroje; ikony Droplet, Triangle, Pointer, Sun, Moon, SprayCan; volby Tvrdost, Síla / Expozice /
+  Tok, Ze všech vrstev, Malování prstem, Rozsah, Chránit tóny, Režim, Živost.
+- Testy: stopa, tónové křivky (gama, rozsahy, monotónnost, chránit tóny), houba, rozostření / zostření hrany, rozmazání
+  (přenos, průhledné okolí, mimo vrstvu, malování prstem), míchání; e2e všech šesti nástrojů (hodnoty, nesčítání v jednom
+  tahu, zpět, výběr, zamčená průhlednost, ze všech vrstev do prázdné vrstvy, maska, zkratka O a lišta voleb, tah myší).
+
 ## Plán dalších verzí
 
 ### Další
 - Magická hůlka a magnetické laso ve workeru; vícevláknový výpočet velkých filtrů (pruhy obrazu ve více workerech).
 - Obrys (kontura) úkosu, záře a saténu; vzorek jako zdroj plechovky a štětce; styly skupin.
 - Svislý text, styly odstavce; masky skupin a ořezová maska nad skupinou.
-- Náhled zdroje uvnitř štětce razítka; retušování ve workeru; nástroje Rozostření / Zostření / Rozmazání, Zesvětlení / Ztmavení / Houba.
+- Náhled zdroje uvnitř štětce razítka; retušování ve workeru; airbrush (sčítání efektu během tahu) a tlak pera.
+- Červené oči, Nahrazení barvy, Vzorkovač barev, Pravítko.
 - Výkon dál: rozdělení i pro vrstvy uvnitř skupin, změna krytí bez přepočtu zmenšeniny celého obrazu, případně WebGL.

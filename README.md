@@ -31,6 +31,7 @@ mají v liště voleb štítek „Připravujeme“ a jejich volby zatím nic ned
 | Kapátko ve štětci, plechovce a přechodu | Alt + klik (tažením průběžně) |
 | Razítko, Vzorkové razítko / zdroj razítka | S / Alt + klik |
 | Bodový retušovací štětec, Retušovací štětec, Záplata / zdroj retuše | J / Alt + klik |
+| Zesvětlení, Ztmavení, Houba (Rozostření, Zostření, Rozmazání jsou ve skupině bez zkratky) | O |
 | Přechod: úhel po 45° / zrušit tažení | Shift / Esc |
 | Text: nový / upravit / potvrdit / zrušit | T + klik do plátna / klik na text, Enter na aktivní textové vrstvě / `Ctrl+Enter` nebo klik mimo / Esc |
 | Obdélníkový/eliptický výběr / Laso / Kouzelná hůlka, Rychlý výběr | M / L / W (skupinu rozbalí pravé tlačítko na ikoně) |
@@ -142,6 +143,14 @@ vrstvu. Retušuje se jen ve výběru a jen pixely (ne maska).
 **Záplata (J):** nakreslete kolem vady výběr (mimo výběr nástroj kreslí jako laso, Shift / Alt přidá / odebere) a
 přetáhněte ho na zdravé místo – v režimu *Zdroj* se vada nahradí texturou z místa, kam výběr pustíte, a barvy se napojí
 na okolí. V režimu *Cíl* se naopak vybrané místo přenese tam, kam ho přetáhnete. Během tažení je vidět náhled.
+
+**Rozostření, Zostření, Rozmazání, Zesvětlení, Ztmavení, Houba:** štětec s nastavitelnou *Tvrdostí* (0 % = měkký okraj
+od středu). Rozostření a zostření mají *Sílu* a volbu *Ze všech vrstev* (jde tak pracovat na prázdné vrstvě nad obrazem).
+*Rozmazání* táhne barvu ve směru tahu (*Síla* = jak daleko), *Malování prstem* začne barvou popředí. *Zesvětlení* a
+*Ztmavení* působí podle *Rozsahu* na stíny, střední tóny nebo světla, *Expozice* = síla, *Chránit tóny* zachová odstín
+a sytost. *Houba* barvy odbarví nebo nasytí (*Tok*), *Živost* chrání už syté barvy před přesycením. Přejíždění v jednom tahu
+efekt nesčítá, další tah ano. Pracuje se jen ve výběru, zamčená průhlednost se dodrží, v režimu úprav masky se upravuje
+maska (kromě houby). Celý tah je jeden krok historie.
 
 **Text:** klik nástrojem Text (T) založí textovou vrstvu a píše se přímo na plátně (víc řádků přes Enter).
 Písmo, řez, velikost, barva, řádkování a zarovnání jsou v liště voleb – během psaní se mění naživo, bez psaní mění

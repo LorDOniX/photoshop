@@ -5,7 +5,6 @@ import {
   Circle,
   Contrast,
   Crosshair,
-  Droplet,
   Eye,
   Frame,
   Minus,
@@ -23,21 +22,17 @@ import {
   Shapes,
   Slash,
   Spline,
-  SprayCan,
   Square,
   SquareDashedMousePointer,
-  Sun,
-  Moon,
   Triangle,
   Type,
-  Waves,
   X,
   Check,
 } from 'lucide';
 import { checkbox, iconButton, segmented, selectField, separator, SliderField, textButton, textField } from '../ui/controls';
 import { h } from '../ui/dom';
 import type { IconNode } from '../ui/icons';
-import { pressureToggles, ratioFields, selectionModes, sizeFields, slider } from './optionParts';
+import { ratioFields, selectionModes, sizeFields, slider } from './optionParts';
 import type { Tool, ToolOptionsUI } from './Tool';
 
 /** Nástroj, který je zatím jen připravený v UI – dá se vybrat a zobrazí volby, ale nic nedělá. */
@@ -75,11 +70,8 @@ const colorReplaceOptions = () => [
   checkbox('Vyhlazování', true),
 ];
 
-const strengthOptions = () => [brushPreset(), slider('Síla:', 50), checkbox('Ze všech vrstev'), ...pressureToggles()];
 
-const toningOptions = () => [brushPreset(), selectField('Rozsah:', ['Stíny', 'Střední tóny', 'Světla'], 'Střední tóny'), slider('Expozice:', 50), ...pressureToggles()];
 
-const spongeOptions = () => [brushPreset(), selectField('Režim:', ['Odbarvit', 'Sytost']), slider('Tok:', 50), ...pressureToggles()];
 
 const textOptions = () => [
   selectField(null, ['DejaVu Sans', 'Arial', 'Roboto', 'Open Sans', 'Times New Roman', 'Courier New']),
@@ -151,12 +143,6 @@ export function createPlaceholderTools(): Tool[] {
     t('ruler', 'Pravítko', Ruler, 'I', () => [textField('X:', '0', 40), textField('Y:', '0', 40), textField('Š:', '0', 40), textField('V:', '0', 40), textField('Ú:', '0°', 40), textButton('Narovnat vrstvu'), textButton('Vymazat')]),
     t('red-eye', 'Červené oči', ScanEye, 'J', () => [slider('Velikost zornice:', 50), slider('Ztmavení:', 50)]),
     t('color-replace', 'Nahrazení barvy', Replace, 'B', colorReplaceOptions),
-    t('blur', 'Rozostření', Droplet, undefined, strengthOptions),
-    t('sharpen', 'Zostření', Triangle, undefined, strengthOptions),
-    t('smudge', 'Rozmazání', Waves, undefined, strengthOptions),
-    t('dodge', 'Zesvětlení', Sun, 'O', toningOptions),
-    t('burn', 'Ztmavení', Moon, 'O', toningOptions),
-    t('sponge', 'Houba', SprayCan, 'O', spongeOptions),
     t('text-vertical', 'Svislý text', Type, 'T', textOptions),
     t('pen', 'Pero', PenTool, 'P', penOptions),
     t('pen-free', 'Volné pero', PenLine, 'P', penOptions),

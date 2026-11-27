@@ -25,6 +25,7 @@ import { createPlaceholderTools } from './tools/PlaceholderTools';
 import { StampTool } from './tools/StampTool';
 import { PatchTool } from './tools/PatchTool';
 import { BackgroundEraserTool } from './tools/BackgroundEraserTool';
+import { RetouchTool } from './tools/RetouchTool';
 import { LassoTool } from './tools/selection/LassoTool';
 import { MagicWandTool } from './tools/selection/MagicWandTool';
 import { MagneticLassoTool } from './tools/selection/MagneticLassoTool';
@@ -77,6 +78,12 @@ editor.tools.register(
   new StampTool(editor, 'spot'),
   new PatchTool(editor),
   new BackgroundEraserTool(editor),
+  new RetouchTool(editor, 'blur'),
+  new RetouchTool(editor, 'sharpen'),
+  new RetouchTool(editor, 'smudge'),
+  new RetouchTool(editor, 'dodge'),
+  new RetouchTool(editor, 'burn'),
+  new RetouchTool(editor, 'sponge'),
   new TextTool(editor),
   new HandTool(editor),
   new CropTool(editor),
