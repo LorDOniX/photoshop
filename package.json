@@ -8,12 +8,17 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
-    "test": "vitest run"
+    "test": "vitest run",
+    "upload": "npm run build && wedos-upload"
+  },
+  "wedosUpload": {
+    "remote": "/www/subdom/app/photoshop/"
   },
   "devDependencies": {
     "typescript": "^7.0.2",
     "vite": "^8.3.8",
-    "vitest": "^5.1.1"
+    "vitest": "^5.1.1",
+    "wedos-upload": "github:LorDOniX/wedos-upload"
   },
   "dependencies": {
     "ag-psd": "^34.2.2",

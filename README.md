@@ -216,3 +216,9 @@ název, krytí a režim spodní vrstvy (jako ve Photoshopu). *Sloučit viditeln�
 Levý panel nástrojů se v nízkém okně rozloží do dvou až tří sloupců.
 
 Ve vývojovém režimu je editor dostupný v konzoli prohlížeče jako `window.editor`.
+
+## Nasazení
+
+- `npm run upload` – build a nahrání `dist/` na FTP do `/www/subdom/app/photoshop/` = https://app.makuderovi.cz/photoshop/
+- balíček [`wedos-upload`](https://github.com/LorDOniX/wedos-upload), cíl v `package.json` pod klíčem `wedosUpload`, přístup na FTP v proměnných prostředí `WEDOS_FTP_HOST`, `WEDOS_FTP_USER`, `WEDOS_FTP_PASSWORD`
+- nahrávají se jen změněné soubory (stav serveru v `build-data/upload.json`, patří do gitu); `npx wedos-upload --dry-run` vypíše změny, `--full` nahraje vše
