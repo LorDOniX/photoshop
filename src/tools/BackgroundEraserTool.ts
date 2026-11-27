@@ -4,6 +4,7 @@ import { parseHex } from '../core/color';
 import { PaintCommand } from '../core/commands/layerCommands';
 import type { Editor } from '../core/Editor';
 import type { Layer } from '../core/Layer';
+import { colorDiff, keepConnected, toleranceWeight } from '../core/paint/tolerance';
 import type { SelectionMask } from '../core/selection/SelectionMask';
 import { checkbox, selectField, SliderField } from '../ui/controls';
 import { h } from '../ui/dom';
@@ -136,10 +137,9 @@ export class BackgroundEraserTool implements Tool {
         if (cover <= 0) continue;
         const p = (y * width + x) * 4;
         if (!d[p + 3]) continue;
-        const diff = Math.max(Math.abs(d[p] - color[0]), Math.abs(d[p + 1] - color[1]), Math.abs(d[p + 2] - color[2]));
-        if (diff >= tol) continue;
-        if (this.protectForeground && Math.max(Math.abs(d[p] - fg.r), Math.abs(d[p + 1] - fg.g), Math.abs(d[p + 2] - fg.b)) < tol) continue;
-        const k = diff <= tol / 2 ? 1 : 1 - (diff - tol / 2) / (tol / 2);
+        const k = toleranceWeight(colorDiff(d, p, color), tol);
+        if (k <= 0) continue;
+        if (this.protectForeground && colorDiff(d, p, [fg.r, fg.g, fg.b]) < tol) continue;
         let w = cover * k;
         if (s.selection) {
           const sx = rect.x + x + s.layer.x;
@@ -224,32 +224,4 @@ export class BackgroundEraserTool implements Tool {
     );
     return { element, dispose: unsubscribe };
   }
-}
-
-/** Souvislé: ponechá jen pixely spojené (4-sousedstvím) se středem otisku, ostatní vynuluje. */
-function keepConnected(strength: Float32Array, width: number, height: number, sx: number, sy: number): void {
-  const seen = new Uint8Array(strength.length);
-  const cx = Math.min(width - 1, Math.max(0, sx));
-  const cy = Math.min(height - 1, Math.max(0, sy));
-  const start = cy * width + cx;
-  if (strength[start] > 0) {
-    const stack = [start];
-    seen[start] = 1;
-    while (stack.length) {
-      const i = stack.pop()!;
-      const x = i % width;
-      const y = (i - x) / width;
-      const visit = (j: number) => {
-        if (!seen[j] && strength[j] > 0) {
-          seen[j] = 1;
-          stack.push(j);
-        }
-      };
-      if (x > 0) visit(i - 1);
-      if (x < width - 1) visit(i + 1);
-      if (y > 0) visit(i - width);
-      if (y < height - 1) visit(i + width);
-    }
-  }
-  for (let i = 0; i < strength.length; i++) if (!seen[i]) strength[i] = 0;
 }

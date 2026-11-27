@@ -26,6 +26,10 @@ import { StampTool } from './tools/StampTool';
 import { PatchTool } from './tools/PatchTool';
 import { BackgroundEraserTool } from './tools/BackgroundEraserTool';
 import { RetouchTool } from './tools/RetouchTool';
+import { ColorReplaceTool } from './tools/ColorReplaceTool';
+import { RedEyeTool } from './tools/RedEyeTool';
+import { ColorSamplerTool } from './tools/ColorSamplerTool';
+import { RulerTool } from './tools/RulerTool';
 import { LassoTool } from './tools/selection/LassoTool';
 import { MagicWandTool } from './tools/selection/MagicWandTool';
 import { MagneticLassoTool } from './tools/selection/MagneticLassoTool';
@@ -84,6 +88,10 @@ editor.tools.register(
   new RetouchTool(editor, 'dodge'),
   new RetouchTool(editor, 'burn'),
   new RetouchTool(editor, 'sponge'),
+  new ColorReplaceTool(editor),
+  new RedEyeTool(editor),
+  new ColorSamplerTool(editor),
+  new RulerTool(editor),
   new TextTool(editor),
   new HandTool(editor),
   new CropTool(editor),

@@ -1406,3 +1406,20 @@ button {
   margin-left: 8px;
   font-size: 12px;
 }
+
+/* Vzorkovač barev – hodnoty v liště voleb */
+.sampler-readouts {
+  display: inline-flex;
+  gap: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.sampler-readout {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  white-space: pre;
+}
+.sampler-readout .color-chip {
+  width: 14px;
+  height: 14px;
+}

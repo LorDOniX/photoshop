@@ -4,7 +4,6 @@ import {
   AlignRight,
   Circle,
   Contrast,
-  Crosshair,
   Eye,
   Frame,
   Minus,
@@ -14,11 +13,8 @@ import {
   Pentagon,
   Plus,
   Pointer,
-  Replace,
   RotateCw,
-  Ruler,
   Scissors,
-  ScanEye,
   Shapes,
   Slash,
   Spline,
@@ -59,16 +55,8 @@ export class PlaceholderTool implements Tool {
 
 const sliceOptions = () => [selectField('Styl:', ['Normální', 'Pevný poměr', 'Pevná velikost']), textButton('Řezy z vodítek')];
 
-const brushPreset = () => slider('Štětec:', 20, 500, ' px', 1);
 
 
-const colorReplaceOptions = () => [
-  brushPreset(),
-  selectField('Režim:', ['Odstín', 'Sytost', 'Barva', 'Světlost']),
-  selectField('Omezení:', ['Souvislé', 'Nesouvislé']),
-  slider('Tolerance:', 30),
-  checkbox('Vyhlazování', true),
-];
 
 
 
@@ -139,10 +127,6 @@ export function createPlaceholderTools(): Tool[] {
     t('crop-perspective', 'Perspektivní oříznutí', Triangle, 'C', () => [...sizeFields(), iconButton(X, 'Zrušit'), iconButton(Check, 'Potvrdit')]),
     t('slice', 'Řez', Scissors, 'C', sliceOptions),
     t('slice-select', 'Výběr řezu', Pointer, 'C', () => [textButton('Rozdělit…')]),
-    t('color-sampler', 'Vzorkovač barev', Crosshair, 'I', () => [selectField('Velikost vzorku:', ['1 × 1', '3 × 3', '5 × 5']), textButton('Vymazat vše')]),
-    t('ruler', 'Pravítko', Ruler, 'I', () => [textField('X:', '0', 40), textField('Y:', '0', 40), textField('Š:', '0', 40), textField('V:', '0', 40), textField('Ú:', '0°', 40), textButton('Narovnat vrstvu'), textButton('Vymazat')]),
-    t('red-eye', 'Červené oči', ScanEye, 'J', () => [slider('Velikost zornice:', 50), slider('Ztmavení:', 50)]),
-    t('color-replace', 'Nahrazení barvy', Replace, 'B', colorReplaceOptions),
     t('text-vertical', 'Svislý text', Type, 'T', textOptions),
     t('pen', 'Pero', PenTool, 'P', penOptions),
     t('pen-free', 'Volné pero', PenLine, 'P', penOptions),

@@ -27,10 +27,11 @@ mají v liště voleb štítek „Připravujeme“ a jejich volby zatím nic ned
 | Akce | Zkratka |
 |---|---|
 | Přesun / Štětec, Tužka / Guma, Guma pozadí, Kouzelná guma / Ruka / Lupa | V / B / E / H / Z (skupinu rozbalí pravé tlačítko na ikoně) |
-| Kapátko (Alt = barva pozadí) / Přechod, Plechovka | I / G (skupinu rozbalí pravé tlačítko na ikoně) |
+| Kapátko (Alt = barva pozadí), Vzorkovač barev, Pravítko / Přechod, Plechovka | I / G (skupinu rozbalí pravé tlačítko na ikoně) |
 | Kapátko ve štětci, plechovce a přechodu | Alt + klik (tažením průběžně) |
 | Razítko, Vzorkové razítko / zdroj razítka | S / Alt + klik |
-| Bodový retušovací štětec, Retušovací štětec, Záplata / zdroj retuše | J / Alt + klik |
+| Bodový retušovací štětec, Retušovací štětec, Záplata, Červené oči / zdroj retuše | J / Alt + klik |
+| Nahrazení barvy (ve skupině se štětcem) / nabrat barvu | B / Alt + klik |
 | Zesvětlení, Ztmavení, Houba (Rozostření, Zostření, Rozmazání jsou ve skupině bez zkratky) | O |
 | Přechod: úhel po 45° / zrušit tažení | Shift / Esc |
 | Text: nový / upravit / potvrdit / zrušit | T + klik do plátna / klik na text, Enter na aktivní textové vrstvě / `Ctrl+Enter` nebo klik mimo / Esc |
@@ -151,6 +152,20 @@ od středu). Rozostření a zostření mají *Sílu* a volbu *Ze všech vrstev* 
 a sytost. *Houba* barvy odbarví nebo nasytí (*Tok*), *Živost* chrání už syté barvy před přesycením. Přejíždění v jednom tahu
 efekt nesčítá, další tah ano. Pracuje se jen ve výběru, zamčená průhlednost se dodrží, v režimu úprav masky se upravuje
 maska (kromě houby). Celý tah je jeden krok historie.
+
+**Nahrazení barvy (B):** štětec přebarví barvou popředí jen pixely podobné vzorkované barvě, jas zůstane (stíny a kresba
+nezmizí). *Režim* odstín / sytost / barva / světlost, *Vzorkování* průběžně (pod křížkem uprostřed štětce) / jednou / barva
+pozadí, *Omezení* souvislé / nesouvislé, *Tolerance* a *Vyhlazování* (měkký přechod na okraji tolerance). Alt+klik nabere
+barvu popředí.
+
+**Červené oči (J):** klik do zornice ji odbarví a ztmaví (opraví se červená oblast spojená s místem kliku, odlesk zůstane),
+tažení obdélníku opraví všechny červené pixely v něm. *Velikost zornice* = citlivost, *Ztmavení* = jak tmavá zornice bude.
+
+**Vzorkovač barev (I):** klik přidá až 4 body, jejichž barva (RGB) se průběžně ukazuje v liště voleb; tažením se body
+posouvají, Alt+klik bod smaže. Velikost vzorku a zdroj (vrstva / aktuální a nižší / všechny vrstvy) jako u kapátka.
+**Pravítko (I):** tažením změří úsečku – v liště počátek X, Y, rozměry Š, V, úhel Ú a délka D; konce jde přetáhnout,
+Shift = po 45°. *Narovnat vrstvu* otočí aktivní vrstvu (s výběrem vybrané pixely), aby úsečka byla vodorovná (nebo svislá).
+Body vzorkovače i pravítko patří dokumentu a do historie se nezapisují.
 
 **Text:** klik nástrojem Text (T) založí textovou vrstvu a píše se přímo na plátně (víc řádků přes Enter).
 Písmo, řez, velikost, barva, řádkování a zarovnání jsou v liště voleb – během psaní se mění naživo, bez psaní mění

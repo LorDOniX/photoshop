@@ -437,6 +437,26 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
   (přenos, průhledné okolí, mimo vrstvu, malování prstem), míchání; e2e všech šesti nástrojů (hodnoty, nesčítání v jednom
   tahu, zpět, výběr, zamčená průhlednost, ze všech vrstev do prázdné vrstvy, maska, zkratka O a lišta voleb, tah myší).
 
+## Verze 0.24 – Nahrazení barvy, červené oči, vzorkovač barev, pravítko (hotovo)
+
+- core/paint/recolor.ts: `recolor` = neoddělitelné režimy W3C (odstín, sytost, barva, světlost – SetLum / SetSat /
+  ClipColor), `redness` (poměr červené k průměru zelené a modré, práh podle velikosti zornice, tmavé pixely ne),
+  `redEyeMask` (klik = oblast spojená s nejčervenějším pixelem do 12 px od kliku, obdélník = všechny červené; okraj
+  změkčený 3 × 3), `removeRedEye` (červená = průměr G a B, ztmavení až na 20 %).
+- core/paint/tolerance.ts: `colorDiff`, `toleranceWeight` (s vyhlazením / bez), `keepConnected` – přesunuté z gumy pozadí,
+  sdílené s nahrazením barvy.
+- tools/ColorReplaceTool.ts: stavba jako guma pozadí (otisky po ¼ velikosti, barvy z originálu, síla v pixelu jen roste,
+  takže se otisky nesčítají), Alt = kapátko. tools/RedEyeTool.ts: klik hledá v okolí ±150 px, tah = obdélník, zápis přes
+  `paintLayer` (zámky, rasterizace textu), bez nálezu upozornění.
+- tools/ColorSamplerTool.ts: až 4 body na dokument (WeakMap), hodnoty v liště z `samplePixels` (sdílená mezipaměť
+  složeného obrazu); po změně obrazu se obnovují nejvýš 4× za sekundu. tools/RulerTool.ts + core/measure.ts: úhel proti
+  směru hodinových ručiček, `straightenAngle` srovná k nejbližší ose, narovnání = `TransformSession` (jako Úpravy →
+  Transformovat) a úsečka se smaže.
+- Testy: režimy přebarvení (jas, sytost, rozsah), tolerance, souvislost, červenost, maska zornice (klik / obdélník / mimo),
+  oprava, úhel a narovnání; e2e nahrazení barvy (jednou / průběžně, souvislé, světlost, zpět, Alt = kapátko), červené
+  oči (klik, druhé oko, odlesk, obdélník, pleť), vzorkovač myší (přidání, hodnoty, posun, obnova, limit, Alt+klik),
+  pravítko myší (hodnoty, Shift, narovnání, zpět, vymazat).
+
 ## Plán dalších verzí
 
 ### Další
@@ -444,5 +464,5 @@ Nehotové funkce jsou v UI připravené (zašedlé položky, štítek „Připra
 - Obrys (kontura) úkosu, záře a saténu; vzorek jako zdroj plechovky a štětce; styly skupin.
 - Svislý text, styly odstavce; masky skupin a ořezová maska nad skupinou.
 - Náhled zdroje uvnitř štětce razítka; retušování ve workeru; airbrush (sčítání efektu během tahu) a tlak pera.
-- Červené oči, Nahrazení barvy, Vzorkovač barev, Pravítko.
+- Panel Info (vzorkovače, pravítko, poloha kurzoru); narovnání s ořezem; vodítka.
 - Výkon dál: rozdělení i pro vrstvy uvnitř skupin, změna krytí bez přepočtu zmenšeniny celého obrazu, případně WebGL.
